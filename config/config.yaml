@@ -1,0 +1,103 @@
+paths:
+  input_dir: input
+  output_dir: output
+  log_dir: logs
+
+pipeline:
+  product_mode: flat_relief
+  detail_mode: preserve_holes
+  background_removal_enabled: false
+  debug: false
+
+watcher:
+  stable_check_seconds: 1.0
+  stable_check_attempts: 5
+
+silhouette:
+  upscale_factor: 2
+  pre_blur_radius: 1
+  adaptive_threshold: false
+  threshold: 20
+  threshold_value: 128
+  blur_radius: 3
+  morphology_enabled: true
+  morph_kernel_size: 3
+  morph_iterations: 1
+  invert: false
+  smoothing_enabled: true
+  smoothing_strength: 3
+  min_contour_area: 25
+  simplify_tolerance: 0.8
+  preserve_holes: true
+  preserve_internal_details: true
+  default_detail_behavior: raised
+  detail_mode: preserve_holes
+  detail_height_mm: 0.8
+  engraving_depth_mm: 0.6
+  contour_smoothing_enabled: true
+  contour_smoothing_strength: 1
+  collinear_merge_tolerance: 2.0
+  sharp_corner_angle_threshold: 35.0
+  safe_smoothing_enabled: true
+  smoothing_profile: conservative
+  max_area_change_percent: 10
+  max_bbox_change_percent: 10
+  max_aspect_ratio_change_percent: 10
+  max_point_reduction_percent: 80
+  straight_line_cleanup_enabled: true
+  straight_line_tolerance: 4.0
+  min_straight_segment_length_px: 24
+  curve_fit_enabled: true
+  curve_fit_tolerance: 1.0
+  min_curve_segment_length_px: 12
+  max_curve_error_percent: 5
+  remove_small_islands: true
+  min_island_area_px: 75
+  preserve_islands_near_body: true
+  island_near_body_distance_px: 8
+
+svg:
+  vectorizer_backend: opencv
+  min_contour_area: 25
+  simplify_epsilon: 1.5
+  simplify_tolerance: 0.8
+  smoothing_enabled: true
+  contour_smoothing_enabled: true
+  contour_smoothing_strength: 1
+  collinear_merge_tolerance: 2.0
+  sharp_corner_angle_threshold: 35.0
+  safe_smoothing_enabled: true
+  smoothing_profile: conservative
+  max_area_change_percent: 10
+  max_bbox_change_percent: 10
+  max_aspect_ratio_change_percent: 10
+  max_point_reduction_percent: 80
+  straight_line_cleanup_enabled: true
+  straight_line_tolerance: 4.0
+  min_straight_segment_length_px: 24
+  curve_fit_enabled: true
+  curve_fit_tolerance: 1.0
+  min_curve_segment_length_px: 12
+  max_curve_error_percent: 5
+
+stl:
+  product_mode: flat_relief
+  width_mm: 100.0
+  output_scale_mm: 100.0
+  base_height_mm: 1.6
+  relief_height_mm: 3.0
+  extrusion_height_mm: 3.0
+  detail_height_mm: 0.8
+  engraving_depth_mm: 0.6
+  detail_mode: preserve_holes
+  max_mesh_pixels: 40000
+  preserve_holes: true
+  add_keychain_hole: false
+  keychain_hole_diameter_mm: 5.0
+  keychain_loop_outer_diameter_mm: 10.0
+  bevel_enabled: false
+  bevel_pixels: 1
+  curve_sample_resolution: 2
+
+preview:
+  image_size_px: 1200
