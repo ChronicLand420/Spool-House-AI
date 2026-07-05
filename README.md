@@ -47,6 +47,20 @@ docs/screenshots/gui-processing.png
 docs/screenshots/gui-output.png
 ```
 
+## Development Log
+
+Session patch notes live in [`docs/devlog/`](docs/devlog/). Each meaningful development session should create one entry that records what changed, why, how it was tested, and what still needs attention.
+
+## Patch Notes Workflow
+
+Before changes:
+
+```powershell
+python scripts/new_devlog.py
+```
+
+After changes, fill in Summary, Why, Files Changed, Features Added, Bugs Fixed, Tests Run, Known Issues, and Next Suggested Steps.
+
 ## Project Layout
 
 ```text
