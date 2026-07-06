@@ -451,7 +451,8 @@ def _max_distance_to_line(points: np.ndarray, start: np.ndarray, end: np.ndarray
     norm = float(np.linalg.norm(line))
     if norm == 0.0:
         return 0.0
-    distances = np.abs(np.cross(line, points - start)) / norm
+    offsets = points - start
+    distances = np.abs(line[0] * offsets[:, 1] - line[1] * offsets[:, 0]) / norm
     return float(np.max(distances))
 
 

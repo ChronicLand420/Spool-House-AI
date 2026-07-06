@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import cv2
@@ -11,8 +13,38 @@ from spool_house_ai.processing.analysis import ImageAnalysis
 from spool_house_ai.processing.geometry import VectorContour
 
 
-def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
+@dataclass(frozen=True)
+class MeshReport:
+    stl_path: str
+    exists: bool
+    file_size_bytes: int
+    vertex_count: int
+    face_count: int
+    bounding_box_mm: list[float]
+    empty_mesh: bool
+    invalid_bounds: bool
+    warnings: list[str]
+    failures: list[str]
+
+
+def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> str:
     """Create a simple raised relief STL from a binary silhouette mask."""
+    if config.stl_backend == "vector_extrusion":
+        try:
+            _create_vector_extrusion_stl(analysis, output_path, config)
+            return "vector_extrusion"
+        except (ImportError, RuntimeError, ValueError):
+            _create_raster_heightfield_stl(analysis, output_path, config)
+            return "raster_heightfield"
+
+    if config.stl_backend != "raster_heightfield":
+        raise ValueError(f"Unsupported stl_backend: {config.stl_backend}")
+
+    _create_raster_heightfield_stl(analysis, output_path, config)
+    return "raster_heightfield"
+
+
+def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
     mask = _mask_for_stl(analysis, config)
     mask = _prepare_product_mask(mask, config)
     resized_mask, detail_mask, color_masks = _resize_analysis_masks(analysis, mask, config)
@@ -69,6 +101,150 @@ def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, c
 
     mesh = trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=True)
     mesh.export(output_path)
+
+
+def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
+    if not isinstance(analysis, ImageAnalysis) or not analysis.vector_contours:
+        raise ValueError("Vector extrusion requires analyzed vector contours.")
+    if config.product_mode == "keychain" and config.add_keychain_hole:
+        raise ValueError("Vector extrusion does not currently create keychain loops.")
+    if config.detail_mode not in {"silhouette_only", "preserve_holes"}:
+        raise ValueError("Vector extrusion currently supports silhouette and hole-preserving modes only.")
+
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except ImportError as error:
+        raise ImportError("Vector extrusion requires optional polygon dependencies.") from error
+
+    height, width = analysis.final_mask.shape
+    scale = config.output_scale_mm / width
+    depth_mm = height * scale
+    extrusion_height = config.base_height_mm + (
+        config.extrusion_height_mm
+        * {
+            "flat_relief": 1.0,
+            "keychain": 1.15,
+            "wall_art": 1.6,
+        }.get(config.product_mode, 1.0)
+    )
+
+    exterior_polygons: list[Polygon] = []
+    hole_polygons: list[Polygon] = []
+    for contour in analysis.vector_contours:
+        ring = _contour_to_mm_ring(contour.points, scale, depth_mm)
+        if len(ring) < 3:
+            continue
+        polygon = Polygon(ring)
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        if polygon.is_empty or polygon.area <= 0:
+            continue
+        if contour.is_hole:
+            hole_polygons.append(polygon)
+        else:
+            exterior_polygons.append(polygon)
+
+    polygons = []
+    for exterior in exterior_polygons:
+        holes = [
+            list(hole.exterior.coords)
+            for hole in hole_polygons
+            if exterior.contains(hole.representative_point())
+        ]
+        polygon = Polygon(list(exterior.exterior.coords), holes)
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        if not polygon.is_empty and polygon.area > 0:
+            polygons.append(polygon)
+
+    if not polygons:
+        raise ValueError("Vector extrusion did not find valid polygons.")
+
+    merged = unary_union(polygons)
+    merged_polygons = list(merged.geoms) if hasattr(merged, "geoms") else [merged]
+    meshes = [
+        trimesh.creation.extrude_polygon(polygon, height=extrusion_height)
+        for polygon in merged_polygons
+        if not polygon.is_empty and polygon.area > 0
+    ]
+    if not meshes:
+        raise ValueError("Vector extrusion did not create any meshes.")
+
+    mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+    mesh.export(output_path)
+
+
+def validate_stl_mesh(stl_path: Path) -> MeshReport:
+    warnings: list[str] = []
+    failures: list[str] = []
+    stl_path = stl_path.resolve()
+
+    exists = stl_path.exists()
+    file_size_bytes = stl_path.stat().st_size if exists else 0
+    if not exists:
+        failures.append("STL file was not created.")
+        return MeshReport(
+            stl_path=str(stl_path),
+            exists=False,
+            file_size_bytes=0,
+            vertex_count=0,
+            face_count=0,
+            bounding_box_mm=[],
+            empty_mesh=True,
+            invalid_bounds=True,
+            warnings=warnings,
+            failures=failures,
+        )
+    if file_size_bytes == 0:
+        failures.append("STL file is empty.")
+
+    vertex_count = 0
+    face_count = 0
+    bounding_box_mm: list[float] = []
+    empty_mesh = True
+    invalid_bounds = True
+
+    try:
+        mesh = trimesh.load_mesh(stl_path, force="mesh")
+        vertex_count = int(len(mesh.vertices))
+        face_count = int(len(mesh.faces))
+        empty_mesh = bool(mesh.is_empty or vertex_count == 0 or face_count == 0)
+        if empty_mesh:
+            failures.append("Mesh has no vertices or faces.")
+
+        bounds = np.asarray(mesh.bounds, dtype=float)
+        if bounds.shape == (2, 3) and np.all(np.isfinite(bounds)):
+            dimensions = bounds[1] - bounds[0]
+            if np.all(np.isfinite(dimensions)) and np.all(dimensions > 0):
+                invalid_bounds = False
+                bounding_box_mm = [round(float(value), 4) for value in dimensions]
+            else:
+                failures.append("Mesh bounds have non-positive dimensions.")
+        else:
+            failures.append("Mesh bounds are missing or invalid.")
+
+        if not bool(getattr(mesh, "is_watertight", False)):
+            warnings.append("Mesh is not watertight.")
+    except Exception as error:
+        failures.append(f"Could not load STL for validation: {error}")
+
+    return MeshReport(
+        stl_path=str(stl_path),
+        exists=exists,
+        file_size_bytes=file_size_bytes,
+        vertex_count=vertex_count,
+        face_count=face_count,
+        bounding_box_mm=bounding_box_mm,
+        empty_mesh=empty_mesh,
+        invalid_bounds=invalid_bounds,
+        warnings=warnings,
+        failures=failures,
+    )
+
+
+def write_mesh_report(report: MeshReport, output_path: Path) -> None:
+    output_path.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
 
 
 def _prepare_product_mask(mask: np.ndarray, config: StlConfig) -> np.ndarray:
@@ -143,6 +319,19 @@ def _vector_mask_for_stl(
         points = np.round(contour.points * scale).astype(np.int32).reshape(-1, 1, 2)
         cv2.drawContours(canvas, [points], -1, 0 if contour.is_hole else 255, thickness=-1)
     return canvas > 127
+
+
+def _contour_to_mm_ring(points: np.ndarray, scale: float, depth_mm: float) -> list[tuple[float, float]]:
+    ring: list[tuple[float, float]] = []
+    previous: tuple[float, float] | None = None
+    for point in points:
+        current = (float(point[0]) * scale, depth_mm - (float(point[1]) * scale))
+        if current != previous:
+            ring.append(current)
+            previous = current
+    if len(ring) > 1 and ring[0] == ring[-1]:
+        ring.pop()
+    return ring
 
 
 def _resize_analysis_masks(

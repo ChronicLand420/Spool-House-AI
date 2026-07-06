@@ -11,7 +11,7 @@ from spool_house_ai.config import AppConfig
 from spool_house_ai.processing.analysis import analyze_image, save_mask
 from spool_house_ai.processing.background import background_removal_available, remove_background
 from spool_house_ai.processing.preview import create_preview, save_stage_previews
-from spool_house_ai.processing.stl import create_relief_stl
+from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh, write_mesh_report
 from spool_house_ai.processing.vectorize import create_svg
 
 
@@ -36,6 +36,7 @@ class ImagePipeline:
         silhouette_png_path = output_dir / f"{image_path.stem}_silhouette.png"
         svg_path = output_dir / f"{image_path.stem}.svg"
         stl_path = output_dir / f"{image_path.stem}.stl"
+        mesh_report_path = output_dir / "mesh_report.json"
         preview_path = output_dir / f"{image_path.stem}_preview.png"
         body_mask_path = output_dir / f"{image_path.stem}_body_mask.png"
         detail_mask_path = output_dir / f"{image_path.stem}_detail_mask.png"
@@ -110,10 +111,29 @@ class ImagePipeline:
         stl_created = False
         try:
             _emit(stage_callback, "Mesh Forge", "active", "Generating printable mesh", svg_path)
-            create_relief_stl(analysis, stl_path, self.config.stl)
-            stl_created = True
+            stl_backend_used = create_relief_stl(analysis, stl_path, self.config.stl)
+            if stl_backend_used != self.config.stl.stl_backend:
+                self.logger.warning(
+                    "Requested STL backend %s fell back to %s",
+                    self.config.stl.stl_backend,
+                    stl_backend_used,
+                )
+            mesh_report = validate_stl_mesh(stl_path)
+            write_mesh_report(mesh_report, mesh_report_path)
+            if mesh_report.failures:
+                for failure in mesh_report.failures:
+                    self.logger.error("Mesh validation failure: %s", failure)
+                _emit(stage_callback, "Mesh Forge", "failed", f"Mesh report: {mesh_report_path}", mesh_report_path)
+            elif mesh_report.warnings:
+                for warning in mesh_report.warnings:
+                    self.logger.warning("Mesh validation warning: %s", warning)
+                self.logger.warning("Mesh report saved: %s", mesh_report_path)
+                _emit(stage_callback, "Mesh Forge", "done", f"STL created with warnings: {mesh_report_path}", stl_path)
+            else:
+                self.logger.info("Mesh validation passed: %s", mesh_report_path)
+                _emit(stage_callback, "Mesh Forge", "done", "STL mesh created", stl_path)
+            stl_created = not mesh_report.failures
             self.logger.info("Mesh stage complete: %s", stl_path)
-            _emit(stage_callback, "Mesh Forge", "done", "STL mesh created", stl_path)
         except ImportError as error:
             self.logger.error("Missing dependency while generating STL %s: %s", image_path, error)
             _emit(stage_callback, "Mesh Forge", "failed", f"Missing dependency: {error}", None)
@@ -135,6 +155,7 @@ class ImagePipeline:
         self.logger.info("Created SVG: %s", svg_path)
         if stl_created:
             self.logger.info("Created STL: %s", stl_path)
+            self.logger.info("Created mesh report: %s", mesh_report_path)
         self.logger.info("Created preview: %s", preview_path)
         return stl_created
 
@@ -147,6 +168,7 @@ def _emit(callback: StageCallback | None, room: str, state: str, message: str, t
 def _write_job_settings(path: Path, config: AppConfig) -> None:
     lines = [
         "product:",
+        f"  stl_backend: {config.stl.stl_backend}",
         f"  product_mode: {config.stl.product_mode}",
         f"  detail_mode: {config.stl.detail_mode}",
         f"  extrusion_height_mm: {config.stl.extrusion_height_mm}",

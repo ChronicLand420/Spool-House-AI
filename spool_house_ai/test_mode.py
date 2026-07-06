@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -104,11 +105,14 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
         output_dir / f"{test_image.stem}_preview_contours.png",
         output_dir / f"{test_image.stem}_preview_svg.png",
         output_dir / f"{test_image.stem}_preview_stl.png",
+        output_dir / "mesh_report.json",
     ]
     missing = [path for path in expected_outputs if not path.exists()]
     if missing:
         for path in missing:
             logger.error("Test mode missing expected output: %s", path)
+        return False
+    if not _mesh_report_is_sane(output_dir / "mesh_report.json", logger):
         return False
 
     geometry_image = create_geometry_test_image(config)
@@ -122,11 +126,14 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
         geometry_output_dir / "final_vector_preview.png",
         geometry_output_dir / f"{geometry_image.stem}.svg",
         geometry_output_dir / f"{geometry_image.stem}.stl",
+        geometry_output_dir / "mesh_report.json",
     ]
     missing_geometry = [path for path in geometry_expected if not path.exists()]
     if missing_geometry:
         for path in missing_geometry:
             logger.error("Geometry test missing expected output: %s", path)
+        return False
+    if not _mesh_report_is_sane(geometry_output_dir / "mesh_report.json", logger):
         return False
 
     analysis = analyze_image(
@@ -197,11 +204,14 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
         v5_output_dir / f"{v5_image.stem}_body_mask.png",
         v5_output_dir / f"{v5_image.stem}_detail_mask.png",
         v5_output_dir / f"{v5_image.stem}.stl",
+        v5_output_dir / "mesh_report.json",
     ]
     missing_v5 = [path for path in v5_expected if not path.exists()]
     if missing_v5:
         for path in missing_v5:
             logger.error("V5 test missing expected output: %s", path)
+        return False
+    if not _mesh_report_is_sane(v5_output_dir / "mesh_report.json", logger):
         return False
     v5_analysis = analyze_image(
         v5_output_dir / f"{v5_image.stem}_cleaned.png",
@@ -220,6 +230,30 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
 
     logger.info("Test mode verified V2, V4, and V5 outputs")
     return stl_created and geometry_stl_created and real_world_created and v5_created
+
+
+def _mesh_report_is_sane(path: Path, logger: logging.Logger) -> bool:
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        logger.error("Could not read mesh report %s: %s", path, error)
+        return False
+
+    checks = {
+        "exists": bool(report.get("exists")),
+        "file_size_bytes": int(report.get("file_size_bytes", 0)) > 0,
+        "vertex_count": int(report.get("vertex_count", 0)) > 0,
+        "face_count": int(report.get("face_count", 0)) > 0,
+        "bounding_box_mm": len(report.get("bounding_box_mm", [])) == 3,
+        "empty_mesh": not bool(report.get("empty_mesh")),
+        "invalid_bounds": not bool(report.get("invalid_bounds")),
+        "failures": not report.get("failures"),
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        logger.error("Mesh report failed sanity checks %s: %s", path, ", ".join(failed))
+        return False
+    return True
 
 
 def replace_for_fallback_test(config: AppConfig) -> AppConfig:

@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("sidePanel")
         layout = QVBoxLayout(panel)
+        self.stl_backend = self._combo(["raster_heightfield", "vector_extrusion"])
         self.product_mode = self._combo(["flat_relief", "keychain", "wall_art"])
         self.detail_mode = self._combo(["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"])
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
@@ -279,6 +280,7 @@ class MainWindow(QMainWindow):
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
 
         controls = [
+            ("stl_backend", self.stl_backend),
             ("product_mode", self.product_mode),
             ("detail_mode", self.detail_mode),
             ("extrusion_height_mm", self.extrusion_height),
@@ -369,6 +371,7 @@ class MainWindow(QMainWindow):
         svg = replace(self.config.svg, min_contour_area=self.min_area.value(), simplify_tolerance=self.simplify.value())
         stl = replace(
             self.config.stl,
+            stl_backend=self.stl_backend.currentText(),
             product_mode=product_mode,
             detail_mode=detail_mode,
             extrusion_height_mm=self.extrusion_height.value(),

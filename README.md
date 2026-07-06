@@ -159,7 +159,7 @@ python -m spool_house_ai.gui
 Override product settings from the CLI:
 
 ```powershell
-python -m spool_house_ai.main --once --product-mode keychain --threshold 145 --height 4.0 --debug
+python -m spool_house_ai.main --once --product-mode keychain --threshold 145 --height 4.0 --stl-backend raster_heightfield --debug
 ```
 
 ## Product Modes
@@ -200,6 +200,7 @@ output/example/
   example_preview_detail_mask.png
   example_preview_svg.png
   example_preview_stl.png
+  mesh_report.json
   job_settings.yaml
 ```
 
@@ -234,6 +235,7 @@ silhouette:
   engraving_depth_mm: 0.6
 
 stl:
+  stl_backend: raster_heightfield
   product_mode: flat_relief
   detail_mode: preserve_holes
   output_scale_mm: 100.0
@@ -244,6 +246,11 @@ stl:
   add_keychain_hole: false
   keychain_hole_diameter_mm: 5.0
 ```
+
+`stl_backend` supports:
+
+- `raster_heightfield`: default, safest backend, preserves existing SHAI behavior.
+- `vector_extrusion`: optional contour extrusion backend for simple silhouette/hole-preserving jobs. If optional polygon extrusion support is unavailable or the selected product/detail mode is not supported, SHAI falls back to `raster_heightfield`.
 
 ## Geometry Quality / Smoothing Settings
 

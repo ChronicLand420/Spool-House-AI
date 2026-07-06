@@ -25,5 +25,8 @@ jobs:
       - name: Compile package
         run: python -m compileall spool_house_ai
 
+      - name: Run regression tests
+        run: python -m unittest discover -s tests
+
       - name: Run pipeline test mode
         run: python -m spool_house_ai.main --test

@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
         help="Override the extrusion height in millimeters.",
     )
     parser.add_argument(
+        "--stl-backend",
+        choices=["raster_heightfield", "vector_extrusion"],
+        help="Override the STL backend. raster_heightfield remains the safe default.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable more verbose debug logging.",
@@ -114,6 +119,9 @@ def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
 
     if args.height is not None:
         stl_config = replace(stl_config, extrusion_height_mm=args.height)
+
+    if args.stl_backend:
+        stl_config = replace(stl_config, stl_backend=args.stl_backend)
 
     if args.debug:
         pipeline_config = replace(pipeline_config, debug=True)
