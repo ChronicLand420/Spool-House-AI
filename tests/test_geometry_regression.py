@@ -65,6 +65,47 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertEqual(len(report.bounding_box_mm), 3)
             self.assertFalse(report.empty_mesh)
             self.assertFalse(report.invalid_bounds)
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertEqual(report.failures, [])
+
+    def test_raster_mesh_with_hole_is_watertight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stl_path = Path(temp_dir) / "raster_hole.stl"
+            mask = np.zeros((64, 96), dtype=bool)
+            mask[8:56, 10:86] = True
+            mask[24:40, 38:58] = False
+
+            create_relief_stl(mask, stl_path, self.stl_config)
+            report = validate_stl_mesh(stl_path)
+
+            self.assertTrue(report.exists)
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertEqual(report.warnings, [])
+            self.assertEqual(report.failures, [])
+
+    def test_raster_mesh_resolves_diagonal_contacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stl_path = Path(temp_dir) / "raster_diagonal_contacts.stl"
+            mask = np.zeros((18, 18), dtype=bool)
+            for index in range(3, 15):
+                mask[index, index] = True
+                mask[index, index + 1] = True
+
+            create_relief_stl(mask, stl_path, self.stl_config)
+            report = validate_stl_mesh(stl_path)
+
+            self.assertTrue(report.exists)
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertEqual(report.warnings, [])
             self.assertEqual(report.failures, [])
 
     def test_vector_backend_falls_back_to_sane_stl_when_optional_extrusion_is_unavailable(self) -> None:
@@ -90,6 +131,8 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertGreater(report.file_size_bytes, 0)
             self.assertGreater(report.vertex_count, 0)
             self.assertGreater(report.face_count, 0)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertEqual(report.failures, [])
 
     @staticmethod

@@ -23,6 +23,10 @@ class MeshReport:
     bounding_box_mm: list[float]
     empty_mesh: bool
     invalid_bounds: bool
+    watertight: bool
+    open_edge_count: int
+    overused_edge_count: int
+    non_manifold_edge_count: int
     warnings: list[str]
     failures: list[str]
 
@@ -48,6 +52,7 @@ def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_
     mask = _mask_for_stl(analysis, config)
     mask = _prepare_product_mask(mask, config)
     resized_mask, detail_mask, color_masks = _resize_analysis_masks(analysis, mask, config)
+    resized_mask = _resolve_diagonal_contacts(resized_mask)
     height, width = resized_mask.shape
 
     scale = config.output_scale_mm / width
@@ -193,6 +198,10 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
             bounding_box_mm=[],
             empty_mesh=True,
             invalid_bounds=True,
+            watertight=False,
+            open_edge_count=0,
+            overused_edge_count=0,
+            non_manifold_edge_count=0,
             warnings=warnings,
             failures=failures,
         )
@@ -204,6 +213,10 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
     bounding_box_mm: list[float] = []
     empty_mesh = True
     invalid_bounds = True
+    watertight = False
+    open_edge_count = 0
+    overused_edge_count = 0
+    non_manifold_edge_count = 0
 
     try:
         mesh = trimesh.load_mesh(stl_path, force="mesh")
@@ -224,8 +237,15 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
         else:
             failures.append("Mesh bounds are missing or invalid.")
 
-        if not bool(getattr(mesh, "is_watertight", False)):
+        watertight = bool(getattr(mesh, "is_watertight", False))
+        open_edge_count, overused_edge_count, non_manifold_edge_count = _mesh_edge_counts(mesh)
+        if not watertight:
             warnings.append("Mesh is not watertight.")
+        if non_manifold_edge_count > 0:
+            warnings.append(
+                "Mesh has non-manifold edges "
+                f"(open: {open_edge_count}, overused: {overused_edge_count})."
+            )
     except Exception as error:
         failures.append(f"Could not load STL for validation: {error}")
 
@@ -238,6 +258,10 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
         bounding_box_mm=bounding_box_mm,
         empty_mesh=empty_mesh,
         invalid_bounds=invalid_bounds,
+        watertight=watertight,
+        open_edge_count=open_edge_count,
+        overused_edge_count=overused_edge_count,
+        non_manifold_edge_count=non_manifold_edge_count,
         warnings=warnings,
         failures=failures,
     )
@@ -420,3 +444,59 @@ def _resize_for_mesh(mask: np.ndarray, max_pixels: int) -> np.ndarray:
         interpolation=cv2.INTER_AREA,
     )
     return resized > 0
+
+
+def _resolve_diagonal_contacts(mask: np.ndarray) -> np.ndarray:
+    """Remove 2x2 diagonal-only contacts that create non-manifold raster walls."""
+    fixed = mask.astype(bool).copy()
+    height, width = fixed.shape
+    max_passes = max(1, min(max(height, width), 64))
+
+    for _ in range(max_passes):
+        source = fixed.copy()
+        changed = False
+        for y in range(height - 1):
+            for x in range(width - 1):
+                top_left = source[y, x]
+                top_right = source[y, x + 1]
+                bottom_left = source[y + 1, x]
+                bottom_right = source[y + 1, x + 1]
+
+                if top_left and bottom_right and not top_right and not bottom_left:
+                    changed = _fill_stronger_bridge_pixel(fixed, source, [(y, x + 1), (y + 1, x)]) or changed
+                elif top_right and bottom_left and not top_left and not bottom_right:
+                    changed = _fill_stronger_bridge_pixel(fixed, source, [(y, x), (y + 1, x + 1)]) or changed
+        if not changed:
+            break
+
+    return fixed
+
+
+def _fill_stronger_bridge_pixel(
+    fixed: np.ndarray,
+    source: np.ndarray,
+    candidates: list[tuple[int, int]],
+) -> bool:
+    best_y, best_x = max(candidates, key=lambda point: _neighbor_count(source, point[0], point[1]))
+    if fixed[best_y, best_x]:
+        return False
+    fixed[best_y, best_x] = True
+    return True
+
+
+def _neighbor_count(mask: np.ndarray, y: int, x: int) -> int:
+    y0 = max(0, y - 1)
+    y1 = min(mask.shape[0], y + 2)
+    x0 = max(0, x - 1)
+    x1 = min(mask.shape[1], x + 2)
+    return int(np.count_nonzero(mask[y0:y1, x0:x1]))
+
+
+def _mesh_edge_counts(mesh: trimesh.Trimesh) -> tuple[int, int, int]:
+    if len(mesh.faces) == 0 or len(mesh.edges_unique) == 0:
+        return 0, 0, 0
+    edge_use_counts = np.bincount(mesh.edges_unique_inverse, minlength=len(mesh.edges_unique))
+    open_edge_count = int(np.count_nonzero(edge_use_counts == 1))
+    overused_edge_count = int(np.count_nonzero(edge_use_counts > 2))
+    non_manifold_edge_count = int(np.count_nonzero(edge_use_counts != 2))
+    return open_edge_count, overused_edge_count, non_manifold_edge_count

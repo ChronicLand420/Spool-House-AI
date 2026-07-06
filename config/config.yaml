@@ -91,7 +91,7 @@ stl:
   detail_height_mm: 0.8
   engraving_depth_mm: 0.6
   detail_mode: preserve_holes
-  max_mesh_pixels: 40000
+  max_mesh_pixels: 160000
   preserve_holes: true
   add_keychain_hole: false
   keychain_hole_diameter_mm: 5.0
