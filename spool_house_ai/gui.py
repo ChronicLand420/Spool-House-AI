@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from dataclasses import replace
@@ -111,6 +112,7 @@ class RoomCard(QFrame):
 
     def set_state(self, state: str, message: str, thumbnail: Path | None) -> None:
         icons = {"idle": "○", "active": "●", "done": "✓", "failed": "!"}
+        icons = {"idle": "[ ]", "active": "[*]", "done": "[OK]", "failed": "[!]"}
         progress = {"idle": 0, "active": 55, "done": 100, "failed": 100}
         self.header.setText(f"{icons.get(state, '○')} {self.title}")
         self.status.setText(message)
@@ -127,7 +129,7 @@ class RoomCard(QFrame):
 class PipelineWorker(QThread):
     stage_changed = Signal(str, str, str, str)
     log_line = Signal(str)
-    finished_job = Signal(bool, str, str)
+    finished_job = Signal(bool, str, str, str, str)
 
     def __init__(self, config: AppConfig, image_path: Path) -> None:
         super().__init__()
@@ -148,7 +150,7 @@ class PipelineWorker(QThread):
 
         ok = pipeline.process(self.image_path, stage_callback=on_stage)
         output_dir = self.config.output_dir / self.image_path.stem
-        self.finished_job.emit(ok, str(output_dir), self.image_path.stem)
+        self.finished_job.emit(ok, str(output_dir), self.image_path.stem, str(self.image_path), self.config.stl.stl_backend)
 
 
 class MainWindow(QMainWindow):
@@ -206,7 +208,7 @@ class MainWindow(QMainWindow):
         self.open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
         self.open_svg_button.clicked.connect(lambda: self.open_named_output(".svg"))
         self.open_preview_button.clicked.connect(lambda: self.open_named_output("_preview.png"))
-        layout.addWidget(QLabel("Drag PNG/JPG files here"))
+        layout.addWidget(QLabel("Queue: Generate processes the first item"))
         layout.addWidget(add_button)
         layout.addWidget(self.queue, 1)
         layout.addWidget(self.generate_button)
@@ -248,6 +250,7 @@ class MainWindow(QMainWindow):
             if index < len(ROOMS) - 1:
                 connector = QLabel("━━━━")
                 connector.setObjectName("connector")
+                connector.setText("----")
                 connector.setAlignment(Qt.AlignCenter)
                 grid.addWidget(connector, index // 4, (index % 4) * 2 + 1)
         scroll.setWidget(panel)
@@ -257,7 +260,7 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("sidePanel")
         layout = QVBoxLayout(panel)
-        self.stl_backend = self._combo(["raster_heightfield", "vector_extrusion"])
+        self.stl_backend = self._backend_combo()
         self.product_mode = self._combo(["flat_relief", "keychain", "wall_art"])
         self.detail_mode = self._combo(["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"])
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
@@ -280,7 +283,7 @@ class MainWindow(QMainWindow):
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
 
         controls = [
-            ("stl_backend", self.stl_backend),
+            ("STL backend", self.stl_backend),
             ("product_mode", self.product_mode),
             ("detail_mode", self.detail_mode),
             ("extrusion_height_mm", self.extrusion_height),
@@ -307,6 +310,14 @@ class MainWindow(QMainWindow):
     def _combo(self, values: list[str]) -> QComboBox:
         combo = QComboBox()
         combo.addItems(values)
+        return combo
+
+    def _backend_combo(self) -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("raster_heightfield - default/stable", "raster_heightfield")
+        combo.addItem("vector_extrusion - experimental/fallback-capable", "vector_extrusion")
+        index = combo.findData(self.config.stl.stl_backend)
+        combo.setCurrentIndex(max(0, index))
         return combo
 
     def _double_spin(self, minimum: float, maximum: float, value: float) -> QDoubleSpinBox:
@@ -338,6 +349,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Spool House AI", "Add an image first.")
             return
         image_path = Path(self.queue.item(0).text())
+        self.logs.append(f"Selected input: {image_path}")
+        self.logs.append(f"Requested STL backend: {self._selected_stl_backend()}")
+        self.logs.append("Queue mode: processing the first queued item only.")
         self.reset_rooms()
         self.generate_button.setEnabled(False)
         config = self._config_from_controls()
@@ -371,7 +385,7 @@ class MainWindow(QMainWindow):
         svg = replace(self.config.svg, min_contour_area=self.min_area.value(), simplify_tolerance=self.simplify.value())
         stl = replace(
             self.config.stl,
-            stl_backend=self.stl_backend.currentText(),
+            stl_backend=self._selected_stl_backend(),
             product_mode=product_mode,
             detail_mode=detail_mode,
             extrusion_height_mm=self.extrusion_height.value(),
@@ -388,12 +402,19 @@ class MainWindow(QMainWindow):
         if room in self.rooms:
             self.rooms[room].set_state(state, message, Path(thumbnail) if thumbnail else None)
 
-    def job_finished(self, ok: bool, output_dir: str, stem: str) -> None:
+    def job_finished(self, ok: bool, output_dir: str, stem: str, input_path: str, requested_backend: str) -> None:
         self.current_output_dir = Path(output_dir)
         self.current_stem = stem
         self.generate_button.setEnabled(True)
         for button in [self.open_output_button, self.open_stl_button, self.open_svg_button, self.open_preview_button]:
             button.setEnabled(True)
+        mesh_report_path = self.current_output_dir / "mesh_report.json"
+        self.logs.append(f"Input file: {input_path}")
+        self.logs.append(f"Output folder: {self.current_output_dir}")
+        self.logs.append(f"Requested STL backend: {requested_backend}")
+        if mesh_report_path.exists():
+            self.logs.append(f"Mesh report: {mesh_report_path}")
+            self._append_mesh_report_summary(mesh_report_path)
         self.logs.append("Job complete." if ok else "Job complete with warnings. Check logs.")
         self.refresh_review()
 
@@ -410,6 +431,25 @@ class MainWindow(QMainWindow):
     def open_path(self, path: Path | None) -> None:
         if path and path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _selected_stl_backend(self) -> str:
+        data = self.stl_backend.currentData()
+        return str(data or self.stl_backend.currentText())
+
+    def _append_mesh_report_summary(self, report_path: Path) -> None:
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            self.logs.append(f"Could not read mesh report: {error}")
+            return
+
+        bounds = report.get("bounding_box_mm")
+        if bounds:
+            self.logs.append(f"Mesh bounds mm: {bounds}")
+        for warning in report.get("warnings") or []:
+            self.logs.append(f"Mesh warning: {warning}")
+        for failure in report.get("failures") or []:
+            self.logs.append(f"Mesh failure: {failure}")
 
     def refresh_review(self) -> None:
         if not self.current_output_dir or not self.current_output_dir.exists():

@@ -26,6 +26,14 @@ Launch the GUI:
 python -m spool_house_ai.gui
 ```
 
+Create a Windows desktop shortcut for the GUI:
+
+```powershell
+python scripts/create_desktop_shortcut.py
+```
+
+This creates `Spool House AI GUI` on the current user's Desktop and points it at this repository with the repo root as the working directory.
+
 The app supports:
 
 - Drag/drop PNG or JPG files into the queue.

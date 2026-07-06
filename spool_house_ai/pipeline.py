@@ -112,6 +112,7 @@ class ImagePipeline:
         try:
             _emit(stage_callback, "Mesh Forge", "active", "Generating printable mesh", svg_path)
             stl_backend_used = create_relief_stl(analysis, stl_path, self.config.stl)
+            self.logger.info("STL backend used: %s", stl_backend_used)
             if stl_backend_used != self.config.stl.stl_backend:
                 self.logger.warning(
                     "Requested STL backend %s fell back to %s",
