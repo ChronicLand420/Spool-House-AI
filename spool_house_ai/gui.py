@@ -8,7 +8,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import QThread, Qt, QUrl, Signal
-    from PySide6.QtGui import QDesktopServices, QPixmap
+    from PySide6.QtGui import QDesktopServices, QFontMetrics, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -21,8 +21,10 @@ try:
         QHBoxLayout,
         QLabel,
         QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMessageBox,
+        QSizePolicy,
         QPushButton,
         QProgressBar,
         QScrollArea,
@@ -53,6 +55,11 @@ ROOMS = [
     "Render Bay",
     "Output Vault",
 ]
+
+
+def _elide_text(widget: QWidget, text: str, reserve_px: int = 24) -> str:
+    width = max(80, widget.width() - reserve_px)
+    return QFontMetrics(widget.font()).elidedText(text, Qt.ElideMiddle, width)
 
 
 class GuiLogHandler(logging.Handler):
@@ -95,13 +102,17 @@ class RoomCard(QFrame):
         self.title = title
         self.setObjectName("roomCard")
         self.setMaximumHeight(150)
-        self.setMinimumWidth(145)
+        self.setMinimumWidth(165)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(7)
-        self.header = QLabel(f"○ {title}")
+        self.header = QLabel(title)
         self.header.setObjectName("roomTitle")
         self.status = QLabel("Idle")
+        self.status.setObjectName("roomStatus")
+        self.status.setWordWrap(False)
+        self.status.setMinimumHeight(20)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -119,10 +130,9 @@ class RoomCard(QFrame):
         self.set_state("idle", "Idle", None)
 
     def set_state(self, state: str, message: str, thumbnail: Path | None) -> None:
-        icons = {"idle": "○", "active": "●", "done": "✓", "failed": "!"}
         icons = {"idle": "[ ]", "active": "[*]", "done": "[OK]", "failed": "[!]"}
         progress = {"idle": 0, "active": 55, "done": 100, "failed": 100}
-        self.header.setText(f"{icons.get(state, '○')} {self.title}")
+        self.header.setText(f"{icons.get(state, '[ ]')} {self.title}")
         self.status.setText(message)
         self.progress.setValue(progress.get(state, 0))
         status_labels = {
@@ -133,7 +143,10 @@ class RoomCard(QFrame):
         }
         status_text = status_labels.get(state, "Waiting")
         self.header.setText(self.title)
-        self.status.setText(f"{status_text} - {message}")
+        full_status = f"{status_text} - {message}"
+        self.status.setText(status_text)
+        self.status.setToolTip(full_status)
+        self.header.setToolTip(self.title)
         self.setProperty("state", "warning" if status_text == "Warning" else state)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -196,26 +209,43 @@ class MainWindow(QMainWindow):
             subtitle.setObjectName("appSubtitle")
             root.addWidget(subtitle)
 
-        splitter = QSplitter()
-        splitter.addWidget(self._left_panel())
-        splitter.addWidget(self._bunker_panel())
-        splitter.addWidget(self._settings_panel())
-        splitter.setSizes([300, 650, 430])
-        root.addWidget(splitter, 1)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.addWidget(self._left_panel())
+        main_splitter.addWidget(self._bunker_panel())
+        main_splitter.addWidget(self._settings_panel())
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.setSizes([300, 650, 430])
 
+        log_panel = QWidget()
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(0, 0, 0, 0)
         log_title = QLabel("Status Log")
         log_title.setObjectName("sectionTitle")
-        root.addWidget(log_title)
+        log_layout.addWidget(log_title)
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
-        self.logs.setFixedHeight(112)
-        root.addWidget(self.logs)
+        self.logs.setMinimumHeight(72)
+        self.logs.setMaximumHeight(210)
+        log_layout.addWidget(self.logs)
+
+        vertical_splitter = QSplitter(Qt.Vertical)
+        vertical_splitter.addWidget(main_splitter)
+        vertical_splitter.addWidget(log_panel)
+        vertical_splitter.setChildrenCollapsible(False)
+        vertical_splitter.setSizes([660, 130])
+        root.addWidget(vertical_splitter, 1)
         self.setCentralWidget(central)
         self._apply_style()
 
     def _left_panel(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setObjectName("leftScroll")
+
         panel = QFrame()
         panel.setObjectName("sidePanel")
+        panel.setMinimumWidth(280)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(9)
@@ -224,7 +254,7 @@ class MainWindow(QMainWindow):
         add_button.clicked.connect(self.add_image)
         self.queue = DropQueue()
         self.queue.files_added.connect(self.add_files)
-        self.queue.setMinimumHeight(150)
+        self.queue.setMinimumHeight(110)
         self.generate_button = QPushButton("Generate Product")
         self.generate_button.setObjectName("primaryButton")
         self.generate_button.clicked.connect(self.generate)
@@ -260,6 +290,7 @@ class MainWindow(QMainWindow):
         self.review_stage = self._combo(["original", "cleaned", "body", "holes", "details", "vector", "STL"])
         self.review_stage.currentTextChanged.connect(self.refresh_review)
         self.review_warning = QLabel("")
+        self.review_warning.setWordWrap(True)
         self.review_before = QLabel("before")
         self.review_after = QLabel("after")
         for label in [self.review_before, self.review_after]:
@@ -271,12 +302,14 @@ class MainWindow(QMainWindow):
         compare_row.addWidget(self.review_after)
         self.geometry_report_view = QTextEdit()
         self.geometry_report_view.setReadOnly(True)
-        self.geometry_report_view.setFixedHeight(110)
+        self.geometry_report_view.setMinimumHeight(72)
+        self.geometry_report_view.setMaximumHeight(120)
         layout.addWidget(self.review_stage)
         layout.addWidget(self.review_warning)
         layout.addLayout(compare_row)
         layout.addWidget(self.geometry_report_view)
-        return panel
+        scroll.setWidget(panel)
+        return scroll
 
     def _bunker_panel(self) -> QWidget:
         scroll = QScrollArea()
@@ -284,18 +317,16 @@ class MainWindow(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget()
         grid = QGridLayout(panel)
+        grid.setContentsMargins(14, 14, 14, 14)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(12)
+        columns = 3
         for index, room in enumerate(ROOMS):
             card = RoomCard(room)
             self.rooms[room] = card
-            grid.addWidget(card, index // 4, index % 4)
-            if index < len(ROOMS) - 1:
-                connector = QLabel("━━━━")
-                connector.setObjectName("connector")
-                connector.setText("----")
-                connector.setFixedWidth(0)
-                connector.hide()
-                connector.setAlignment(Qt.AlignCenter)
-                grid.addWidget(connector, index // 4, (index % 4) * 2 + 1)
+            grid.addWidget(card, index // columns, index % columns)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
         scroll.setWidget(panel)
         return scroll
 
@@ -307,6 +338,7 @@ class MainWindow(QMainWindow):
 
         panel = QFrame()
         panel.setObjectName("sidePanel")
+        panel.setMinimumWidth(330)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
@@ -415,7 +447,10 @@ class MainWindow(QMainWindow):
 
     def add_files(self, files: list[Path]) -> None:
         for file in files:
-            self.queue.addItem(str(file))
+            item = QListWidgetItem(_elide_text(self.queue, str(file)))
+            item.setData(Qt.UserRole, str(file))
+            item.setToolTip(str(file))
+            self.queue.addItem(item)
 
     def generate(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -424,8 +459,9 @@ class MainWindow(QMainWindow):
         if self.queue.count() == 0:
             QMessageBox.information(self, "Spool House AI", "Add an image first.")
             return
-        image_path = Path(self.queue.item(0).text())
-        self.logs.append(f"Selected input: {image_path}")
+        first_item = self.queue.item(0)
+        image_path = Path(first_item.data(Qt.UserRole) or first_item.text())
+        self._append_status_path("Selected input", image_path)
         self.logs.append(f"Requested STL backend: {self._selected_stl_backend()}")
         self.logs.append("Queue mode: processing the first queued item only.")
         self.reset_rooms()
@@ -485,11 +521,11 @@ class MainWindow(QMainWindow):
         for button in [self.open_output_button, self.open_stl_button, self.open_svg_button, self.open_preview_button]:
             button.setEnabled(True)
         mesh_report_path = self.current_output_dir / "mesh_report.json"
-        self.logs.append(f"Input file: {input_path}")
-        self.logs.append(f"Output folder: {self.current_output_dir}")
+        self._append_status_path("Input file", Path(input_path))
+        self._append_status_path("Output folder", self.current_output_dir)
         self.logs.append(f"Requested STL backend: {requested_backend}")
         if mesh_report_path.exists():
-            self.logs.append(f"Mesh report: {mesh_report_path}")
+            self._append_status_path("Mesh report", mesh_report_path)
             self._append_mesh_report_summary(mesh_report_path)
         self.logs.append("Job complete." if ok else "Job complete with warnings. Check logs.")
         self.refresh_review()
@@ -511,6 +547,11 @@ class MainWindow(QMainWindow):
     def _selected_stl_backend(self) -> str:
         data = self.stl_backend.currentData()
         return str(data or self.stl_backend.currentText())
+
+    def _append_status_path(self, label: str, path: Path) -> None:
+        full_text = f"{label}: {path}"
+        self.logs.append(_elide_text(self.logs, full_text, reserve_px=40))
+        self.logs.setToolTip(full_text)
 
     def _append_mesh_report_summary(self, report_path: Path) -> None:
         try:
