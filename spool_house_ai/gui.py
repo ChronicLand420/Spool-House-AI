@@ -14,8 +14,10 @@ try:
         QCheckBox,
         QComboBox,
         QFileDialog,
+        QFormLayout,
         QFrame,
         QGridLayout,
+        QGroupBox,
         QHBoxLayout,
         QLabel,
         QListWidget,
@@ -92,15 +94,21 @@ class RoomCard(QFrame):
         super().__init__()
         self.title = title
         self.setObjectName("roomCard")
+        self.setMaximumHeight(150)
+        self.setMinimumWidth(145)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(7)
         self.header = QLabel(f"○ {title}")
         self.header.setObjectName("roomTitle")
         self.status = QLabel("Idle")
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
+        self.progress.setTextVisible(False)
         self.thumb = QLabel()
         self.thumb.setFixedSize(110, 74)
+        self.thumb.setFixedSize(98, 58)
         self.thumb.setAlignment(Qt.AlignCenter)
         self.thumb.setText("preview")
         self.thumb.setObjectName("thumb")
@@ -117,7 +125,16 @@ class RoomCard(QFrame):
         self.header.setText(f"{icons.get(state, '○')} {self.title}")
         self.status.setText(message)
         self.progress.setValue(progress.get(state, 0))
-        self.setProperty("state", state)
+        status_labels = {
+            "idle": "Waiting",
+            "active": "Running",
+            "done": "Warning" if "warning" in message.lower() else "Done",
+            "failed": "Failed",
+        }
+        status_text = status_labels.get(state, "Waiting")
+        self.header.setText(self.title)
+        self.status.setText(f"{status_text} - {message}")
+        self.setProperty("state", "warning" if status_text == "Warning" else state)
         self.style().unpolish(self)
         self.style().polish(self)
         if thumbnail and thumbnail.exists():
@@ -162,8 +179,9 @@ class MainWindow(QMainWindow):
         self.current_output_dir: Path | None = None
         self.current_stem = ""
         self.rooms: dict[str, RoomCard] = {}
-        self.setWindowTitle("Spool House AI V3")
-        self.resize(1400, 860)
+        self.version = _load_version(self.config.project_root)
+        self.setWindowTitle("Spool House AI")
+        self.resize(1360, 820)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -173,17 +191,24 @@ class MainWindow(QMainWindow):
         title = QLabel("Spool House AI")
         title.setObjectName("appTitle")
         root.addWidget(title)
+        if self.version:
+            subtitle = QLabel(self.version)
+            subtitle.setObjectName("appSubtitle")
+            root.addWidget(subtitle)
 
         splitter = QSplitter()
         splitter.addWidget(self._left_panel())
         splitter.addWidget(self._bunker_panel())
         splitter.addWidget(self._settings_panel())
-        splitter.setSizes([260, 820, 320])
+        splitter.setSizes([300, 650, 430])
         root.addWidget(splitter, 1)
 
+        log_title = QLabel("Status Log")
+        log_title.setObjectName("sectionTitle")
+        root.addWidget(log_title)
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
-        self.logs.setFixedHeight(145)
+        self.logs.setFixedHeight(112)
         root.addWidget(self.logs)
         self.setCentralWidget(central)
         self._apply_style()
@@ -192,11 +217,16 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("sidePanel")
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(9)
         add_button = QPushButton("Add Image")
+        add_button.setObjectName("secondaryButton")
         add_button.clicked.connect(self.add_image)
         self.queue = DropQueue()
         self.queue.files_added.connect(self.add_files)
+        self.queue.setMinimumHeight(150)
         self.generate_button = QPushButton("Generate Product")
+        self.generate_button.setObjectName("primaryButton")
         self.generate_button.clicked.connect(self.generate)
         self.open_output_button = QPushButton("Open Output Folder")
         self.open_stl_button = QPushButton("Open STL")
@@ -208,22 +238,32 @@ class MainWindow(QMainWindow):
         self.open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
         self.open_svg_button.clicked.connect(lambda: self.open_named_output(".svg"))
         self.open_preview_button.clicked.connect(lambda: self.open_named_output("_preview.png"))
-        layout.addWidget(QLabel("Queue: Generate processes the first item"))
+        queue_title = QLabel("Image Queue")
+        queue_title.setObjectName("sectionTitle")
+        layout.addWidget(queue_title)
+        queue_note = QLabel("Generate processes the first queued item.")
+        queue_note.setObjectName("mutedText")
+        layout.addWidget(queue_note)
         layout.addWidget(add_button)
         layout.addWidget(self.queue, 1)
         layout.addWidget(self.generate_button)
+        output_title = QLabel("Outputs")
+        output_title.setObjectName("sectionTitle")
+        layout.addWidget(output_title)
         layout.addWidget(self.open_output_button)
         layout.addWidget(self.open_stl_button)
         layout.addWidget(self.open_svg_button)
         layout.addWidget(self.open_preview_button)
-        layout.addWidget(QLabel("Review"))
+        review_title = QLabel("Review")
+        review_title.setObjectName("sectionTitle")
+        layout.addWidget(review_title)
         self.review_stage = self._combo(["original", "cleaned", "body", "holes", "details", "vector", "STL"])
         self.review_stage.currentTextChanged.connect(self.refresh_review)
         self.review_warning = QLabel("")
         self.review_before = QLabel("before")
         self.review_after = QLabel("after")
         for label in [self.review_before, self.review_after]:
-            label.setFixedSize(112, 86)
+            label.setFixedSize(118, 82)
             label.setAlignment(Qt.AlignCenter)
             label.setObjectName("thumb")
         compare_row = QHBoxLayout()
@@ -241,25 +281,35 @@ class MainWindow(QMainWindow):
     def _bunker_panel(self) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget()
         grid = QGridLayout(panel)
         for index, room in enumerate(ROOMS):
             card = RoomCard(room)
             self.rooms[room] = card
-            grid.addWidget(card, index // 4, (index % 4) * 2)
+            grid.addWidget(card, index // 4, index % 4)
             if index < len(ROOMS) - 1:
                 connector = QLabel("━━━━")
                 connector.setObjectName("connector")
                 connector.setText("----")
+                connector.setFixedWidth(0)
+                connector.hide()
                 connector.setAlignment(Qt.AlignCenter)
                 grid.addWidget(connector, index // 4, (index % 4) * 2 + 1)
         scroll.setWidget(panel)
         return scroll
 
     def _settings_panel(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("settingsScroll")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         panel = QFrame()
         panel.setObjectName("sidePanel")
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
         self.stl_backend = self._backend_combo()
         self.product_mode = self._combo(["flat_relief", "keychain", "wall_art"])
         self.detail_mode = self._combo(["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"])
@@ -282,40 +332,66 @@ class MainWindow(QMainWindow):
         self.keychain_diameter = self._double_spin(1.0, 20.0, self.config.stl.keychain_hole_diameter_mm)
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
 
-        controls = [
-            ("STL backend", self.stl_backend),
-            ("product_mode", self.product_mode),
-            ("detail_mode", self.detail_mode),
-            ("extrusion_height_mm", self.extrusion_height),
-            ("base_height_mm", self.base_height),
-            ("threshold_value", self.threshold),
-            ("smoothing_strength", self.smoothing),
-            ("min_contour_area", self.min_area),
-            ("simplify_tolerance", self.simplify),
-            ("detail_height_mm", self.detail_height),
-            ("engraving_depth_mm", self.engraving_depth),
-            ("keychain_hole_diameter_mm", self.keychain_diameter),
-            ("output_scale_mm", self.output_scale),
-        ]
-        for label, widget in controls:
-            layout.addWidget(QLabel(label))
-            layout.addWidget(widget)
-        layout.addWidget(self.preserve_holes)
-        layout.addWidget(self.preserve_details)
-        layout.addWidget(self.background_removal)
-        layout.addWidget(self.keychain_hole)
+        layout.addWidget(self._form_group("STL Backend", [("Backend", self.stl_backend)]))
+        layout.addWidget(self._form_group("Product", [("Product mode", self.product_mode), ("Detail mode", self.detail_mode)]))
+        layout.addWidget(
+            self._form_group(
+                "Dimensions",
+                [
+                    ("Output scale mm", self.output_scale),
+                    ("Base height mm", self.base_height),
+                    ("Extrusion height mm", self.extrusion_height),
+                    ("Detail height mm", self.detail_height),
+                    ("Engraving depth mm", self.engraving_depth),
+                ],
+            )
+        )
+        cleanup_group = self._form_group(
+            "Cleanup / Vector",
+            [
+                ("Threshold", self.threshold),
+                ("Smoothing", self.smoothing),
+                ("Min contour area", self.min_area),
+                ("Simplify tolerance", self.simplify),
+            ],
+        )
+        cleanup_layout = cleanup_group.layout()
+        cleanup_layout.addRow(self.preserve_holes)
+        cleanup_layout.addRow(self.preserve_details)
+        cleanup_layout.addRow(self.background_removal)
+        layout.addWidget(cleanup_group)
+
+        keychain_group = self._form_group("Keychain", [("Hole diameter mm", self.keychain_diameter)])
+        keychain_group.layout().addRow(self.keychain_hole)
+        layout.addWidget(keychain_group)
         layout.addStretch(1)
-        return panel
+        scroll.setWidget(panel)
+        return scroll
 
     def _combo(self, values: list[str]) -> QComboBox:
         combo = QComboBox()
         combo.addItems(values)
         return combo
 
+    def _form_group(self, title: str, rows: list[tuple[str, QWidget]]) -> QGroupBox:
+        group = QGroupBox(title)
+        group.setObjectName("settingsGroup")
+        form = QFormLayout(group)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        for label_text, widget in rows:
+            label = QLabel(label_text)
+            label.setObjectName("formLabel")
+            form.addRow(label, widget)
+        return group
+
     def _backend_combo(self) -> QComboBox:
         combo = QComboBox()
-        combo.addItem("raster_heightfield - default/stable", "raster_heightfield")
-        combo.addItem("vector_extrusion - experimental/fallback-capable", "vector_extrusion")
+        combo.addItem("raster_heightfield - Stable/default", "raster_heightfield")
+        combo.addItem("vector_extrusion - Experimental/fallback-capable", "vector_extrusion")
         index = combo.findData(self.config.stl.stl_backend)
         combo.setCurrentIndex(max(0, index))
         return combo
@@ -481,21 +557,36 @@ class MainWindow(QMainWindow):
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
-            QWidget { background: #141815; color: #e7dfc6; font-family: Segoe UI; }
-            #appTitle { font-size: 28px; font-weight: 700; color: #ffd36a; padding: 8px; }
-            #sidePanel { background: #20251f; border: 1px solid #4a563f; border-radius: 6px; }
-            QPushButton { background: #d6a846; color: #141815; border: 0; padding: 9px; border-radius: 4px; font-weight: 700; }
-            QPushButton:disabled { background: #5c5749; color: #a8a08a; }
-            QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #0f120f; border: 1px solid #4a563f; color: #f0ead6; }
-            #roomCard { background: #242b24; border: 2px solid #4a563f; border-radius: 6px; padding: 6px; }
-            #roomCard[state="active"] { border-color: #ffd36a; background: #303821; }
-            #roomCard[state="done"] { border-color: #7ecb6b; }
-            #roomCard[state="failed"] { border-color: #e26958; }
-            #roomTitle { font-weight: 700; color: #ffd36a; }
-            #thumb { background: #111511; border: 1px solid #4a563f; color: #817961; }
-            #connector { color: #d6a846; font-size: 18px; }
-            QProgressBar { border: 1px solid #4a563f; height: 8px; background: #101410; }
-            QProgressBar::chunk { background: #d6a846; }
+            QWidget { background: #111318; color: #e8eaed; font-family: Segoe UI; font-size: 10.5pt; }
+            #appTitle { font-size: 28px; font-weight: 700; color: #A855F7; padding: 4px 8px 0 8px; }
+            #appSubtitle { color: #8e98a8; padding: 0 8px 6px 8px; }
+            #sectionTitle { color: #f2f4f7; font-size: 12pt; font-weight: 700; margin-top: 6px; }
+            #mutedText { color: #9aa4b2; font-size: 9pt; }
+            #sidePanel { background: #181b22; border: 1px solid #2a303a; border-radius: 8px; }
+            QScrollArea { border: 0; background: #111318; }
+            QSplitter::handle { background: #1c212b; width: 5px; height: 5px; }
+            QPushButton { background: #2b313d; color: #f2f4f7; border: 1px solid #3a4352; padding: 8px 10px; border-radius: 5px; font-weight: 600; }
+            QPushButton:hover { background: #343c49; }
+            QPushButton#primaryButton { background: #A855F7; color: #111318; border: 1px solid #7E22CE; font-weight: 800; }
+            QPushButton#primaryButton:hover { background: #C084FC; }
+            QPushButton:disabled { background: #20242c; color: #687386; border: 1px solid #2a303a; }
+            QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #0d0f14; border: 1px solid #303744; color: #eef1f5; border-radius: 5px; padding: 5px; }
+            QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; }
+            QGroupBox#settingsGroup { background: #151922; border: 1px solid #2a303a; border-radius: 8px; margin-top: 12px; padding-top: 10px; font-weight: 700; color: #A855F7; }
+            QGroupBox#settingsGroup::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+            #formLabel { color: #aeb7c5; font-weight: 500; }
+            QCheckBox { color: #dce1e8; spacing: 8px; }
+            #roomCard { background: #181c24; border: 1px solid #303744; border-radius: 8px; }
+            #roomCard[state="active"] { border-color: #A855F7; background: #202331; }
+            #roomCard[state="done"] { border-color: #55b47a; }
+            #roomCard[state="warning"] { border-color: #A855F7; }
+            #roomCard[state="failed"] { border-color: #e56b6f; }
+            #roomTitle { font-weight: 700; color: #f2f4f7; }
+            #roomStatus { color: #9aa4b2; font-size: 9pt; }
+            #thumb { background: #0d0f14; border: 1px solid #303744; border-radius: 5px; color: #687386; }
+            #connector { color: #596272; font-size: 13px; }
+            QProgressBar { border: 0; height: 6px; background: #272d38; border-radius: 3px; }
+            QProgressBar::chunk { background: #A855F7; border-radius: 3px; }
             """
         )
 
@@ -505,6 +596,13 @@ def main() -> None:
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+
+def _load_version(project_root: Path) -> str:
+    version_path = project_root / "VERSION"
+    if not version_path.exists():
+        return ""
+    return version_path.read_text(encoding="utf-8").strip()
 
 
 if __name__ == "__main__":
