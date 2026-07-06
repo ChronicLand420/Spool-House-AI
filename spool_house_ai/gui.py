@@ -208,6 +208,9 @@ class MainWindow(QMainWindow):
             subtitle = QLabel(self.version)
             subtitle.setObjectName("appSubtitle")
             root.addWidget(subtitle)
+        creator_credit = QLabel("Built by ChronicLand420")
+        creator_credit.setObjectName("creatorCredit")
+        root.addWidget(creator_credit)
 
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self._left_panel())
@@ -601,6 +604,7 @@ class MainWindow(QMainWindow):
             QWidget { background: #111318; color: #e8eaed; font-family: Segoe UI; font-size: 10.5pt; }
             #appTitle { font-size: 28px; font-weight: 700; color: #A855F7; padding: 4px 8px 0 8px; }
             #appSubtitle { color: #8e98a8; padding: 0 8px 6px 8px; }
+            #creatorCredit { color: #9aa4b2; font-size: 9pt; padding: 0 8px 8px 8px; }
             #sectionTitle { color: #f2f4f7; font-size: 12pt; font-weight: 700; margin-top: 6px; }
             #mutedText { color: #9aa4b2; font-size: 9pt; }
             #sidePanel { background: #181b22; border: 1px solid #2a303a; border-radius: 8px; }

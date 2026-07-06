@@ -2,6 +2,8 @@
 
 Spool House AI automates image-to-product preparation for simple 3D printable STL files. V3 adds a real PySide6 desktop app on top of the existing CLI, plus richer image analysis for body masks, true holes, internal detail strokes, and color-region relief experiments.
 
+Created by ChronicLand420.
+
 ## V3 Workflow
 
 1. Watch or scan the `input/` folder.
