@@ -27,6 +27,7 @@ class PipelineJobStatusTests(unittest.TestCase):
             draw = ImageDraw.Draw(image)
             draw.rectangle((28, 24, 132, 96), fill=(20, 20, 20, 255))
             draw.ellipse((62, 42, 98, 78), fill=(255, 255, 255, 255))
+            draw.rectangle((6, 6, 8, 8), fill=(20, 20, 20, 255))
             image.save(input_path)
 
             config = load_config(Path("config/config.yaml"))
@@ -57,6 +58,10 @@ class PipelineJobStatusTests(unittest.TestCase):
             self.assertEqual(status["product_mode"], config.stl.product_mode)
             self.assertEqual(status["detail_mode"], config.stl.detail_mode)
             self.assertGreater(status["mesh_summary"]["face_count"], 0)
+            self.assertIn("artifact_summary", status)
+            self.assertGreaterEqual(status["artifact_summary"]["isolated_island_count"], 1)
+            self.assertGreaterEqual(status["artifact_summary"]["removed_island_count"], 1)
+            self.assertEqual(status["artifact_summary"]["cleanup_preset"], config.silhouette.cleanup_preset)
             self.assertFalse(status["failures"])
 
 

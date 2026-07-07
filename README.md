@@ -251,6 +251,7 @@ pipeline:
   background_removal_enabled: false
 
 silhouette:
+  cleanup_preset: default
   threshold_value: 128
   smoothing_enabled: true
   smoothing_strength: 3
@@ -283,6 +284,18 @@ stl:
 
 `mesh_report.json` records the requested backend, actual backend, fallback reason, watertight status, edge counts, warnings, and failures.
 
+## Cleanup Presets / Artifact Reporting
+
+The GUI exposes cleanup presets in the Cleanup / Vector settings:
+
+- `default`: keeps the existing balanced behavior and preserves nearby small islands when they may be intentional details.
+- `logo_clean`: removes tiny isolated dot artifacts more aggressively for simple logos, wall art, and Nike/Mopar-style artwork.
+- `detail_preserving`: keeps more small detached or near-body detail than `logo_clean` for artwork where tiny pieces may matter.
+
+Use `logo_clean` when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Avoid it when those detached dots are part of the design, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
+
+Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export.
+
 ## Geometry Quality / Smoothing Settings
 
 V4/V5 improves jagged edges by tracing from cleaned, smoothed contours instead of directly exporting raw pixel stairs. V5 adds smart vector cleanup that straightens long nearly-straight runs, smooths curve sections conservatively, removes tiny floating islands, and keeps detail masks available for review.
@@ -291,6 +304,7 @@ Important settings in `config/config.yaml`:
 
 ```yaml
 silhouette:
+  cleanup_preset: default
   upscale_factor: 2
   pre_blur_radius: 1
   adaptive_threshold: false

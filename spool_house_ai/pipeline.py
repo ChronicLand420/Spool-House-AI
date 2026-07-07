@@ -54,6 +54,7 @@ class ImagePipeline:
         failures: list[str] = []
         stl_result: StlCreationResult | None = None
         mesh_report: MeshReport | None = None
+        analysis = None
 
         def write_job_status() -> None:
             try:
@@ -71,6 +72,7 @@ class ImagePipeline:
                     mesh_report=mesh_report,
                     warnings=warnings,
                     failures=failures,
+                    artifact_summary=_artifact_summary(analysis),
                     started_at=started_at,
                     finished_at=datetime.now(timezone.utc),
                     duration_seconds=perf_counter() - started_timer,
@@ -119,6 +121,17 @@ class ImagePipeline:
                 silhouette_png_path,
                 self.config.silhouette,
             )
+            artifact_report = analysis.artifact_report
+            if artifact_report.removed_island_count:
+                self.logger.info("Removed isolated islands: %s", artifact_report.removed_island_count)
+            if artifact_report.preserved_island_count:
+                message = (
+                    f"Small isolated islands detected: {artifact_report.isolated_island_count} "
+                    f"(removed: {artifact_report.removed_island_count}, "
+                    f"preserved: {artifact_report.preserved_island_count})"
+                )
+                warnings.append(message)
+                self.logger.warning(message)
             save_mask(analysis.body_mask, body_mask_path)
             save_mask(analysis.detail_mask, detail_mask_path)
             save_mask(analysis.hole_mask, output_dir / f"{image_path.stem}_hole_mask.png")
@@ -261,6 +274,7 @@ def _write_job_settings(path: Path, config: AppConfig) -> None:
         f"  preserve_holes: {str(config.silhouette.preserve_holes).lower()}",
         f"  preserve_internal_details: {str(config.silhouette.preserve_internal_details).lower()}",
         f"  default_detail_behavior: {config.silhouette.default_detail_behavior}",
+        f"  cleanup_preset: {config.silhouette.cleanup_preset}",
         "geometry:",
         f"  upscale_factor: {config.silhouette.upscale_factor}",
         f"  pre_blur_radius: {config.silhouette.pre_blur_radius}",
@@ -309,6 +323,7 @@ def _write_job_status(
     mesh_report: MeshReport | None,
     warnings: list[str],
     failures: list[str],
+    artifact_summary: dict[str, Any],
     started_at: datetime,
     finished_at: datetime,
     duration_seconds: float,
@@ -348,9 +363,16 @@ def _write_job_status(
         },
         "warnings": warnings,
         "failures": failures,
+        "artifact_summary": artifact_summary,
         "mesh_summary": _mesh_summary(mesh_report),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _artifact_summary(analysis: Any | None) -> dict[str, Any]:
+    if analysis is None:
+        return {}
+    return asdict(analysis.artifact_report)
 
 
 def _mesh_summary(mesh_report: MeshReport | None) -> dict[str, Any]:

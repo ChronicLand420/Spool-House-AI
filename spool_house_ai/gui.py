@@ -42,7 +42,7 @@ except ModuleNotFoundError as error:
     print("Install GUI dependencies with: python -m pip install -r requirements.txt")
     raise SystemExit(1) from error
 
-from spool_house_ai.config import AppConfig, load_config
+from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config
 from spool_house_ai.logging_setup import configure_logging
 from spool_house_ai.pipeline import ImagePipeline
 
@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
         self.batch_total = 0
         self.batch_index = 0
         self.batch_success_count = 0
+        self.batch_warning_count = 0
         self.batch_failure_count = 0
         self.current_stage = "Waiting"
         self.current_stage_progress_index = 0
@@ -412,18 +413,28 @@ class MainWindow(QMainWindow):
             ["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"],
             self.config.stl.detail_mode,
         )
+        self.cleanup_preset = self._combo(
+            ["default", "logo_clean", "detail_preserving"],
+            self.config.silhouette.cleanup_preset,
+        )
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
         self.base_height = self._double_spin(0.2, 10.0, self.config.stl.base_height_mm)
         self.threshold = self._spin(0, 255, self.config.silhouette.threshold_value)
         self.smoothing = self._spin(0, 25, self.config.silhouette.smoothing_strength)
         self.min_area = self._double_spin(0.0, 5000.0, self.config.silhouette.min_contour_area)
         self.simplify = self._double_spin(0.0, 20.0, self.config.silhouette.simplify_tolerance)
+        self.min_island_area = self._double_spin(0.0, 10000.0, self.config.silhouette.min_island_area_px)
+        self.island_distance = self._double_spin(0.0, 100.0, self.config.silhouette.island_near_body_distance_px)
         self.detail_height = self._double_spin(0.0, 10.0, self.config.stl.detail_height_mm)
         self.engraving_depth = self._double_spin(0.0, 10.0, self.config.stl.engraving_depth_mm)
         self.preserve_holes = QCheckBox("preserve_holes")
         self.preserve_holes.setChecked(self.config.silhouette.preserve_holes)
         self.preserve_details = QCheckBox("preserve_internal_details")
         self.preserve_details.setChecked(self.config.silhouette.preserve_internal_details)
+        self.remove_islands = QCheckBox("remove_isolated_islands")
+        self.remove_islands.setChecked(self.config.silhouette.remove_small_islands)
+        self.preserve_islands_near_body = QCheckBox("preserve_islands_near_body")
+        self.preserve_islands_near_body.setChecked(self.config.silhouette.preserve_islands_near_body)
         self.background_removal = QCheckBox("background_removal_enabled")
         self.background_removal.setChecked(self.config.pipeline.background_removal_enabled)
         self.keychain_hole = QCheckBox("add_keychain_hole")
@@ -448,13 +459,18 @@ class MainWindow(QMainWindow):
         cleanup_group = self._form_group(
             "Cleanup / Vector",
             [
+                ("Cleanup preset", self.cleanup_preset),
                 ("Threshold", self.threshold),
                 ("Smoothing", self.smoothing),
                 ("Min contour area", self.min_area),
                 ("Simplify tolerance", self.simplify),
+                ("Min island area px", self.min_island_area),
+                ("Near-body distance px", self.island_distance),
             ],
         )
         cleanup_layout = cleanup_group.layout()
+        cleanup_layout.addRow(self.remove_islands)
+        cleanup_layout.addRow(self.preserve_islands_near_body)
         cleanup_layout.addRow(self.preserve_holes)
         cleanup_layout.addRow(self.preserve_details)
         cleanup_layout.addRow(self.background_removal)
@@ -552,6 +568,7 @@ class MainWindow(QMainWindow):
         self.batch_total = len(jobs)
         self.batch_index = 0
         self.batch_success_count = 0
+        self.batch_warning_count = 0
         self.batch_failure_count = 0
         self.batch_started_at = time.monotonic()
         self.current_stage = "Waiting"
@@ -608,17 +625,27 @@ class MainWindow(QMainWindow):
         )
         silhouette = replace(
             self.config.silhouette,
+            cleanup_preset=self.cleanup_preset.currentText(),
             threshold_value=self.threshold.value(),
             smoothing_strength=self.smoothing.value(),
             min_contour_area=self.min_area.value(),
             simplify_tolerance=self.simplify.value(),
+            remove_small_islands=self.remove_islands.isChecked(),
+            min_island_area_px=self.min_island_area.value(),
+            preserve_islands_near_body=self.preserve_islands_near_body.isChecked(),
+            island_near_body_distance_px=self.island_distance.value(),
             preserve_holes=self.preserve_holes.isChecked(),
             preserve_internal_details=self.preserve_details.isChecked(),
             detail_mode=detail_mode,
             detail_height_mm=self.detail_height.value(),
             engraving_depth_mm=self.engraving_depth.value(),
         )
-        svg = replace(self.config.svg, min_contour_area=self.min_area.value(), simplify_tolerance=self.simplify.value())
+        silhouette = apply_cleanup_preset(silhouette)
+        svg = replace(
+            self.config.svg,
+            min_contour_area=silhouette.min_contour_area,
+            simplify_tolerance=silhouette.simplify_tolerance,
+        )
         stl = replace(
             self.config.stl,
             stl_backend=self._selected_stl_backend(),
@@ -652,16 +679,19 @@ class MainWindow(QMainWindow):
         self._append_status_path("Input file", Path(input_path))
         self._append_status_path("Output folder", self.current_output_dir)
         self.logs.append(f"Requested STL backend: {requested_backend}")
+        job_warning_count = 0
         if mesh_report_path.exists():
             self._append_status_path("Mesh report", mesh_report_path)
             self._append_mesh_report_summary(mesh_report_path)
         if job_status_path.exists():
             self._append_status_path("Job status", job_status_path)
+            job_warning_count = self._append_job_status_summary(job_status_path)
         if not mesh_report_path.exists():
             self._set_status_summary("Done" if ok else "Warnings - check log")
         if ok:
             self.batch_success_count += 1
-            self.logs.append("Job complete.")
+            self.batch_warning_count += job_warning_count
+            self.logs.append("Job complete with warnings." if job_warning_count else "Job complete.")
         else:
             self.batch_failure_count += 1
             self.logs.append("Job complete with warnings or failures. Continuing if batch jobs remain.")
@@ -679,7 +709,8 @@ class MainWindow(QMainWindow):
         total = self.batch_total
         summary = (
             f"Done - {self.batch_success_count}/{total} succeeded - "
-            f"{self.batch_failure_count} warnings/failures - elapsed {_format_duration(elapsed)}"
+            f"{self.batch_warning_count} warnings, {self.batch_failure_count} failures - "
+            f"elapsed {_format_duration(elapsed)}"
         )
         self._set_status_summary(summary, tooltip=summary)
         self.logs.append(f"Batch complete: {self.batch_success_count}/{total} succeeded; elapsed {_format_duration(elapsed)}.")
@@ -829,6 +860,26 @@ class MainWindow(QMainWindow):
             f"mesh {mesh_result} - warnings {warning_count}"
         )
         self._set_status_summary(summary, tooltip=summary)
+
+    def _append_job_status_summary(self, status_path: Path) -> int:
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            self.logs.append(f"Could not read job status: {error}")
+            return 0
+
+        artifact_summary = status.get("artifact_summary") or {}
+        warning_count = len(status.get("warnings") or [])
+        isolated_count = int(artifact_summary.get("isolated_island_count") or 0)
+        removed_count = int(artifact_summary.get("removed_island_count") or 0)
+        preserved_count = int(artifact_summary.get("preserved_island_count") or 0)
+        if isolated_count:
+            self.logs.append(f"Small isolated islands detected: {isolated_count}")
+        if removed_count:
+            self.logs.append(f"Removed isolated islands: {removed_count}")
+        if preserved_count:
+            self.logs.append(f"Preserved isolated islands: {preserved_count}")
+        return warning_count
 
     def refresh_review(self) -> None:
         if not self.current_output_dir or not self.current_output_dir.exists():

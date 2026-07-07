@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from spool_house_ai.config import load_config
+from spool_house_ai.config import apply_cleanup_preset, load_config
 from spool_house_ai.processing.analysis import analyze_image
 from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh
 
@@ -43,6 +43,9 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertTrue(np.any(analysis.hole_mask), "Expected transparent interior hole to be preserved")
             self.assertTrue(np.any(analysis.detail_mask), "Expected internal dark detail lines to survive cleanup")
             self.assertTrue(np.any(analysis.removed_island_mask), "Expected tiny floating islands to be removed")
+            self.assertGreaterEqual(analysis.artifact_report.isolated_island_count, 1)
+            self.assertGreaterEqual(analysis.artifact_report.removed_island_count, 1)
+            self.assertGreaterEqual(analysis.artifact_report.preserved_detail_count, 1)
             self.assertLessEqual(
                 analysis.geometry_report.bbox_change_percent,
                 self.silhouette_config.max_bbox_change_percent,
@@ -188,6 +191,23 @@ class GeometryRegressionTests(unittest.TestCase):
 
             self.assertGreater(int(analysis.final_mask.sum()), 500)
             self.assertGreaterEqual(len(analysis.vector_contours), 1)
+
+    def test_logo_clean_preset_uses_stronger_island_cleanup(self) -> None:
+        logo_config = apply_cleanup_preset(
+            replace(
+                self.silhouette_config,
+                cleanup_preset="logo_clean",
+                min_island_area_px=20,
+                preserve_islands_near_body=True,
+                island_near_body_distance_px=8,
+            )
+        )
+
+        self.assertEqual(logo_config.cleanup_preset, "logo_clean")
+        self.assertTrue(logo_config.remove_small_islands)
+        self.assertGreaterEqual(logo_config.min_island_area_px, 150)
+        self.assertFalse(logo_config.preserve_islands_near_body)
+        self.assertEqual(logo_config.island_near_body_distance_px, 0)
 
     @staticmethod
     def _create_regression_artwork(path: Path) -> None:

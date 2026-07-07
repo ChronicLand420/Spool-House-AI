@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -20,6 +20,21 @@ class ContourFeature:
 
 
 @dataclass(frozen=True)
+class ArtifactReport:
+    isolated_island_count: int
+    removed_island_count: int
+    preserved_island_count: int
+    preserved_detail_count: int
+    smallest_island_area_px: float
+    largest_island_area_px: float
+    island_cleanup_enabled: bool
+    cleanup_preset: str
+    min_island_area_px: float
+    preserve_islands_near_body: bool
+    island_near_body_distance_px: float
+
+
+@dataclass(frozen=True)
 class ImageAnalysis:
     raw_threshold_mask: np.ndarray
     removed_island_mask: np.ndarray
@@ -33,6 +48,7 @@ class ImageAnalysis:
     geometry_report: GeometryReport
     kept_features: list[ContourFeature]
     removed_features: list[ContourFeature]
+    artifact_report: ArtifactReport
 
 
 def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteConfig) -> ImageAnalysis:
@@ -70,7 +86,7 @@ def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteC
         threshold_mask = np.logical_not(threshold_mask)
 
     raw_threshold_mask = threshold_mask.copy()
-    threshold_mask, removed_island_mask = _remove_islands_if_enabled(threshold_mask, config)
+    threshold_mask, removed_island_mask, artifact_report = _remove_islands_if_enabled(threshold_mask, config)
     smoothed_mask = _smooth_mask(threshold_mask, config)
     silhouette_mask, kept_features, removed_features = _remove_small_features(smoothed_mask, config)
     has_transparency = bool(np.any(rgba[:, :, 3] < 255))
@@ -81,6 +97,7 @@ def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteC
         has_transparency=has_transparency,
         config=config,
     )
+    artifact_report = replace(artifact_report, preserved_detail_count=_component_count(detail_mask))
     color_region_masks = _major_color_regions(rgba, body_mask, config)
     final_mask = _final_mask_for_detail_mode(
         silhouette_mask=silhouette_mask,
@@ -131,6 +148,7 @@ def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteC
         geometry_report=geometry_report,
         kept_features=kept_features,
         removed_features=removed_features,
+        artifact_report=artifact_report,
     )
 
 
@@ -207,14 +225,34 @@ def _remove_small_components(mask: np.ndarray, min_area: float) -> np.ndarray:
     return cleaned > 0
 
 
-def _remove_islands_if_enabled(mask: np.ndarray, config: SilhouetteConfig) -> tuple[np.ndarray, np.ndarray]:
-    if not config.remove_small_islands:
-        return mask, np.zeros(mask.shape, dtype=bool)
-
+def _remove_islands_if_enabled(mask: np.ndarray, config: SilhouetteConfig) -> tuple[np.ndarray, np.ndarray, ArtifactReport]:
     component_count, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    small_areas = [
+        float(stats[label, cv2.CC_STAT_AREA])
+        for label in range(1, component_count)
+        if float(stats[label, cv2.CC_STAT_AREA]) < config.min_island_area_px
+    ]
+    if not config.remove_small_islands:
+        report = ArtifactReport(
+            isolated_island_count=len(small_areas),
+            removed_island_count=0,
+            preserved_island_count=len(small_areas),
+            preserved_detail_count=0,
+            smallest_island_area_px=min(small_areas) if small_areas else 0.0,
+            largest_island_area_px=max(small_areas) if small_areas else 0.0,
+            island_cleanup_enabled=False,
+            cleanup_preset=config.cleanup_preset,
+            min_island_area_px=config.min_island_area_px,
+            preserve_islands_near_body=config.preserve_islands_near_body,
+            island_near_body_distance_px=config.island_near_body_distance_px,
+        )
+        return mask, np.zeros(mask.shape, dtype=bool), report
+
     kept = np.zeros(mask.shape, dtype=np.uint8)
     removed = np.zeros(mask.shape, dtype=np.uint8)
     large_body = np.zeros(mask.shape, dtype=np.uint8)
+    removed_count = 0
+    preserved_count = 0
     for label in range(1, component_count):
         area = float(stats[label, cv2.CC_STAT_AREA])
         if area >= config.min_island_area_px:
@@ -232,9 +270,31 @@ def _remove_islands_if_enabled(mask: np.ndarray, config: SilhouetteConfig) -> tu
             keep = bool(np.min(distance[component]) <= config.island_near_body_distance_px)
         if keep:
             kept[component] = 1
+            if area < config.min_island_area_px:
+                preserved_count += 1
         else:
             removed[component] = 1
-    return kept > 0, removed > 0
+            if area < config.min_island_area_px:
+                removed_count += 1
+    report = ArtifactReport(
+        isolated_island_count=len(small_areas),
+        removed_island_count=removed_count,
+        preserved_island_count=preserved_count,
+        preserved_detail_count=0,
+        smallest_island_area_px=min(small_areas) if small_areas else 0.0,
+        largest_island_area_px=max(small_areas) if small_areas else 0.0,
+        island_cleanup_enabled=True,
+        cleanup_preset=config.cleanup_preset,
+        min_island_area_px=config.min_island_area_px,
+        preserve_islands_near_body=config.preserve_islands_near_body,
+        island_near_body_distance_px=config.island_near_body_distance_px,
+    )
+    return kept > 0, removed > 0, report
+
+
+def _component_count(mask: np.ndarray) -> int:
+    component_count, _, _, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    return max(0, component_count - 1)
 
 
 def _major_color_regions(

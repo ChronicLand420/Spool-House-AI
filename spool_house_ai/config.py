@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ class SilhouetteConfig:
     upscale_factor: int
     pre_blur_radius: int
     adaptive_threshold: bool
+    cleanup_preset: str
     threshold: int
     threshold_value: int
     blur_radius: int
@@ -229,49 +230,94 @@ def _pipeline_config(value: dict[str, Any]) -> PipelineConfig:
 
 
 def _silhouette_config(value: dict[str, Any]) -> SilhouetteConfig:
-    return SilhouetteConfig(
-        upscale_factor=int(value.get("upscale_factor", 2)),
-        pre_blur_radius=int(value.get("pre_blur_radius", 1)),
-        adaptive_threshold=bool(value.get("adaptive_threshold", False)),
-        threshold=int(value.get("threshold", 20)),
-        threshold_value=int(value.get("threshold_value", value.get("threshold", 128))),
-        blur_radius=int(value.get("blur_radius", 3)),
-        morphology_enabled=bool(value.get("morphology_enabled", True)),
-        morph_kernel_size=int(value.get("morph_kernel_size", 5)),
-        morph_iterations=int(value.get("morph_iterations", 1)),
-        invert=bool(value.get("invert", False)),
-        smoothing_enabled=bool(value.get("smoothing_enabled", True)),
-        smoothing_strength=int(value.get("smoothing_strength", value.get("blur_radius", 3))),
-        min_contour_area=float(value.get("min_contour_area", 25)),
-        simplify_tolerance=float(value.get("simplify_tolerance", 0.8)),
-        preserve_holes=bool(value.get("preserve_holes", True)),
-        preserve_internal_details=bool(value.get("preserve_internal_details", True)),
-        default_detail_behavior=str(value.get("default_detail_behavior", "raised")),
-        detail_mode=str(value.get("detail_mode", "preserve_holes")),
-        detail_height_mm=float(value.get("detail_height_mm", 0.8)),
-        engraving_depth_mm=float(value.get("engraving_depth_mm", 0.6)),
-        contour_smoothing_enabled=bool(value.get("contour_smoothing_enabled", True)),
-        contour_smoothing_strength=int(value.get("contour_smoothing_strength", 1)),
-        collinear_merge_tolerance=float(value.get("collinear_merge_tolerance", 2.0)),
-        sharp_corner_angle_threshold=float(value.get("sharp_corner_angle_threshold", 35.0)),
-        safe_smoothing_enabled=bool(value.get("safe_smoothing_enabled", True)),
-        smoothing_profile=str(value.get("smoothing_profile", "conservative")),
-        max_area_change_percent=float(value.get("max_area_change_percent", 10)),
-        max_bbox_change_percent=float(value.get("max_bbox_change_percent", 10)),
-        max_aspect_ratio_change_percent=float(value.get("max_aspect_ratio_change_percent", 10)),
-        max_point_reduction_percent=float(value.get("max_point_reduction_percent", 80)),
-        straight_line_cleanup_enabled=bool(value.get("straight_line_cleanup_enabled", True)),
-        straight_line_tolerance=float(value.get("straight_line_tolerance", 4.0)),
-        min_straight_segment_length_px=float(value.get("min_straight_segment_length_px", 24)),
-        curve_fit_enabled=bool(value.get("curve_fit_enabled", True)),
-        curve_fit_tolerance=float(value.get("curve_fit_tolerance", 1.0)),
-        min_curve_segment_length_px=float(value.get("min_curve_segment_length_px", 12)),
-        max_curve_error_percent=float(value.get("max_curve_error_percent", 5)),
-        remove_small_islands=bool(value.get("remove_small_islands", True)),
-        min_island_area_px=float(value.get("min_island_area_px", 75)),
-        preserve_islands_near_body=bool(value.get("preserve_islands_near_body", True)),
-        island_near_body_distance_px=float(value.get("island_near_body_distance_px", 8)),
+    return apply_cleanup_preset(
+        SilhouetteConfig(
+            upscale_factor=int(value.get("upscale_factor", 2)),
+            pre_blur_radius=int(value.get("pre_blur_radius", 1)),
+            adaptive_threshold=bool(value.get("adaptive_threshold", False)),
+            cleanup_preset=str(value.get("cleanup_preset", "default")),
+            threshold=int(value.get("threshold", 20)),
+            threshold_value=int(value.get("threshold_value", value.get("threshold", 128))),
+            blur_radius=int(value.get("blur_radius", 3)),
+            morphology_enabled=bool(value.get("morphology_enabled", True)),
+            morph_kernel_size=int(value.get("morph_kernel_size", 5)),
+            morph_iterations=int(value.get("morph_iterations", 1)),
+            invert=bool(value.get("invert", False)),
+            smoothing_enabled=bool(value.get("smoothing_enabled", True)),
+            smoothing_strength=int(value.get("smoothing_strength", value.get("blur_radius", 3))),
+            min_contour_area=float(value.get("min_contour_area", 25)),
+            simplify_tolerance=float(value.get("simplify_tolerance", 0.8)),
+            preserve_holes=bool(value.get("preserve_holes", True)),
+            preserve_internal_details=bool(value.get("preserve_internal_details", True)),
+            default_detail_behavior=str(value.get("default_detail_behavior", "raised")),
+            detail_mode=str(value.get("detail_mode", "preserve_holes")),
+            detail_height_mm=float(value.get("detail_height_mm", 0.8)),
+            engraving_depth_mm=float(value.get("engraving_depth_mm", 0.6)),
+            contour_smoothing_enabled=bool(value.get("contour_smoothing_enabled", True)),
+            contour_smoothing_strength=int(value.get("contour_smoothing_strength", 1)),
+            collinear_merge_tolerance=float(value.get("collinear_merge_tolerance", 2.0)),
+            sharp_corner_angle_threshold=float(value.get("sharp_corner_angle_threshold", 35.0)),
+            safe_smoothing_enabled=bool(value.get("safe_smoothing_enabled", True)),
+            smoothing_profile=str(value.get("smoothing_profile", "conservative")),
+            max_area_change_percent=float(value.get("max_area_change_percent", 10)),
+            max_bbox_change_percent=float(value.get("max_bbox_change_percent", 10)),
+            max_aspect_ratio_change_percent=float(value.get("max_aspect_ratio_change_percent", 10)),
+            max_point_reduction_percent=float(value.get("max_point_reduction_percent", 80)),
+            straight_line_cleanup_enabled=bool(value.get("straight_line_cleanup_enabled", True)),
+            straight_line_tolerance=float(value.get("straight_line_tolerance", 4.0)),
+            min_straight_segment_length_px=float(value.get("min_straight_segment_length_px", 24)),
+            curve_fit_enabled=bool(value.get("curve_fit_enabled", True)),
+            curve_fit_tolerance=float(value.get("curve_fit_tolerance", 1.0)),
+            min_curve_segment_length_px=float(value.get("min_curve_segment_length_px", 12)),
+            max_curve_error_percent=float(value.get("max_curve_error_percent", 5)),
+            remove_small_islands=bool(value.get("remove_small_islands", True)),
+            min_island_area_px=float(value.get("min_island_area_px", 75)),
+            preserve_islands_near_body=bool(value.get("preserve_islands_near_body", True)),
+            island_near_body_distance_px=float(value.get("island_near_body_distance_px", 8)),
+        )
     )
+
+
+def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) -> SilhouetteConfig:
+    cleanup_preset = _normalize_cleanup_preset(preset or config.cleanup_preset)
+    config = replace(config, cleanup_preset=cleanup_preset)
+    if cleanup_preset == "default":
+        return config
+    if cleanup_preset == "logo_clean":
+        return replace(
+            config,
+            remove_small_islands=True,
+            min_island_area_px=max(config.min_island_area_px, 150.0),
+            preserve_islands_near_body=False,
+            island_near_body_distance_px=0.0,
+            preserve_holes=True,
+            preserve_internal_details=True,
+            morphology_enabled=True,
+            morph_kernel_size=max(config.morph_kernel_size, 3),
+            morph_iterations=max(config.morph_iterations, 1),
+            contour_smoothing_enabled=True,
+            straight_line_cleanup_enabled=True,
+            curve_fit_enabled=True,
+        )
+    if cleanup_preset == "detail_preserving":
+        return replace(
+            config,
+            remove_small_islands=True,
+            min_island_area_px=min(config.min_island_area_px, 35.0),
+            preserve_islands_near_body=True,
+            island_near_body_distance_px=max(config.island_near_body_distance_px, 10.0),
+            preserve_internal_details=True,
+        )
+    return config
+
+
+def _normalize_cleanup_preset(value: str | None) -> str:
+    normalized = str(value or "default").strip().lower().replace(" ", "_").replace("-", "_")
+    if normalized in {"logo", "logo_clean", "logo_cleaning"}:
+        return "logo_clean"
+    if normalized in {"detail", "detail_preserve", "detail_preserving"}:
+        return "detail_preserving"
+    return "default"
 
 
 def _svg_config(value: dict[str, Any]) -> SvgConfig:
