@@ -81,7 +81,7 @@ svg:
   max_curve_error_percent: 5
 
 stl:
-  stl_backend: raster_heightfield
+  stl_backend: auto_vector_first
   product_mode: flat_relief
   width_mm: 100.0
   output_scale_mm: 100.0

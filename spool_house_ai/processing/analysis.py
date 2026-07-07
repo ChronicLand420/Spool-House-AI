@@ -57,13 +57,14 @@ def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteC
             3,
         )
         dark_detail_mask = (adaptive > 0) & visible_mask
+    color_foreground_mask = _saturated_foreground_mask(rgba) & visible_mask
 
     if np.any(rgba[:, :, 3] < 255):
         threshold_mask = visible_mask.copy()
         if config.preserve_internal_details:
             threshold_mask = threshold_mask | dark_detail_mask
     else:
-        threshold_mask = dark_detail_mask
+        threshold_mask = dark_detail_mask | color_foreground_mask
 
     if config.invert:
         threshold_mask = np.logical_not(threshold_mask)
@@ -259,6 +260,14 @@ def _major_color_regions(
         if np.any(region):
             masks.append(region)
     return masks
+
+
+def _saturated_foreground_mask(rgba: np.ndarray) -> np.ndarray:
+    rgb = rgba[:, :, :3]
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    return (saturation > 35) & (value > 45)
 
 
 def _smooth_mask(mask: np.ndarray, config: SilhouetteConfig) -> np.ndarray:

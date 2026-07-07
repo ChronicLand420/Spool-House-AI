@@ -16,6 +16,10 @@ from spool_house_ai.processing.geometry import VectorContour
 @dataclass(frozen=True)
 class MeshReport:
     stl_path: str
+    requested_backend: str
+    actual_backend: str
+    fallback_used: bool
+    fallback_reason: str
     exists: bool
     file_size_bytes: int
     vertex_count: int
@@ -31,21 +35,52 @@ class MeshReport:
     failures: list[str]
 
 
-def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> str:
+@dataclass(frozen=True)
+class StlCreationResult:
+    requested_backend: str
+    actual_backend: str
+    fallback_used: bool
+    fallback_reason: str
+
+
+def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> StlCreationResult:
     """Create a simple raised relief STL from a binary silhouette mask."""
-    if config.stl_backend == "vector_extrusion":
+    if config.stl_backend in {"auto_vector_first", "vector_extrusion"}:
         try:
             _create_vector_extrusion_stl(analysis, output_path, config)
-            return "vector_extrusion"
-        except (ImportError, RuntimeError, ValueError):
+            vector_report = validate_stl_mesh(output_path)
+            if not _mesh_report_is_safe_for_vector_backend(vector_report):
+                raise RuntimeError(
+                    "Vector extrusion produced an invalid mesh "
+                    f"(watertight: {vector_report.watertight}, "
+                    f"non-manifold edges: {vector_report.non_manifold_edge_count}, "
+                    f"failures: {vector_report.failures})"
+                )
+            return StlCreationResult(
+                requested_backend=config.stl_backend,
+                actual_backend="vector_extrusion",
+                fallback_used=False,
+                fallback_reason="",
+            )
+        except (ImportError, RuntimeError, ValueError) as error:
             _create_raster_heightfield_stl(analysis, output_path, config)
-            return "raster_heightfield"
+            return StlCreationResult(
+                requested_backend=config.stl_backend,
+                actual_backend="raster_heightfield",
+                fallback_used=True,
+                fallback_reason=str(error),
+            )
 
     if config.stl_backend != "raster_heightfield":
         raise ValueError(f"Unsupported stl_backend: {config.stl_backend}")
 
     _create_raster_heightfield_stl(analysis, output_path, config)
-    return "raster_heightfield"
+    return StlCreationResult(
+        requested_backend=config.stl_backend,
+        actual_backend="raster_heightfield",
+        fallback_used=False,
+        fallback_reason="",
+    )
 
 
 def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
@@ -180,7 +215,12 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
     mesh.export(output_path)
 
 
-def validate_stl_mesh(stl_path: Path) -> MeshReport:
+def validate_stl_mesh(
+    stl_path: Path,
+    requested_backend: str = "",
+    actual_backend: str = "",
+    fallback_reason: str = "",
+) -> MeshReport:
     warnings: list[str] = []
     failures: list[str] = []
     stl_path = stl_path.resolve()
@@ -191,6 +231,10 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
         failures.append("STL file was not created.")
         return MeshReport(
             stl_path=str(stl_path),
+            requested_backend=requested_backend,
+            actual_backend=actual_backend,
+            fallback_used=bool(fallback_reason),
+            fallback_reason=fallback_reason,
             exists=False,
             file_size_bytes=0,
             vertex_count=0,
@@ -251,6 +295,10 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
 
     return MeshReport(
         stl_path=str(stl_path),
+        requested_backend=requested_backend,
+        actual_backend=actual_backend,
+        fallback_used=bool(fallback_reason),
+        fallback_reason=fallback_reason,
         exists=exists,
         file_size_bytes=file_size_bytes,
         vertex_count=vertex_count,
@@ -269,6 +317,16 @@ def validate_stl_mesh(stl_path: Path) -> MeshReport:
 
 def write_mesh_report(report: MeshReport, output_path: Path) -> None:
     output_path.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
+
+
+def _mesh_report_is_safe_for_vector_backend(report: MeshReport) -> bool:
+    return (
+        not report.failures
+        and report.watertight
+        and report.open_edge_count == 0
+        and report.overused_edge_count == 0
+        and report.non_manifold_edge_count == 0
+    )
 
 
 def _prepare_product_mask(mask: np.ndarray, config: StlConfig) -> np.ndarray:

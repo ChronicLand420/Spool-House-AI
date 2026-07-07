@@ -245,7 +245,7 @@ silhouette:
   engraving_depth_mm: 0.6
 
 stl:
-  stl_backend: raster_heightfield
+  stl_backend: auto_vector_first
   product_mode: flat_relief
   detail_mode: preserve_holes
   output_scale_mm: 100.0
@@ -259,8 +259,11 @@ stl:
 
 `stl_backend` supports:
 
-- `raster_heightfield`: default, safest backend, preserves existing SHAI behavior.
-- `vector_extrusion`: optional contour extrusion backend for simple silhouette/hole-preserving jobs. If optional polygon extrusion support is unavailable or the selected product/detail mode is not supported, SHAI falls back to `raster_heightfield`.
+- `auto_vector_first`: default for logo/wall-art style jobs. SHAI tries contour-based vector extrusion first and falls back to `raster_heightfield` when vector extrusion is unavailable or unsupported.
+- `vector_extrusion`: experimental contour extrusion backend for simple silhouette/hole-preserving jobs.
+- `raster_heightfield`: stable raster fallback that preserves existing SHAI behavior.
+
+`mesh_report.json` records the requested backend, actual backend, fallback reason, watertight status, edge counts, warnings, and failures.
 
 ## Geometry Quality / Smoothing Settings
 

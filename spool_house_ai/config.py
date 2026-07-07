@@ -303,7 +303,7 @@ def _svg_config(value: dict[str, Any]) -> SvgConfig:
 
 def _stl_config(value: dict[str, Any]) -> StlConfig:
     return StlConfig(
-        stl_backend=str(value.get("stl_backend", "raster_heightfield")),
+        stl_backend=str(value.get("stl_backend", "auto_vector_first")),
         product_mode=str(value.get("product_mode", "flat_relief")),
         width_mm=float(value.get("width_mm", 100.0)),
         output_scale_mm=float(value.get("output_scale_mm", value.get("width_mm", 100.0))),

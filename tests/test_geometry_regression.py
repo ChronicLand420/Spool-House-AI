@@ -56,7 +56,8 @@ class GeometryRegressionTests(unittest.TestCase):
             hole_x = 190 * self.silhouette_config.upscale_factor
             self.assertFalse(analysis.body_mask[hole_y, hole_x], "Hole center should not be filled in the body mask")
 
-            create_relief_stl(analysis, stl_path, self.stl_config)
+            stl_result = create_relief_stl(analysis, stl_path, self.stl_config)
+            self.assertEqual(stl_result.actual_backend, "raster_heightfield")
             report = validate_stl_mesh(stl_path)
             self.assertTrue(report.exists)
             self.assertGreater(report.file_size_bytes, 0)
@@ -108,7 +109,7 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertEqual(report.warnings, [])
             self.assertEqual(report.failures, [])
 
-    def test_vector_backend_falls_back_to_sane_stl_when_optional_extrusion_is_unavailable(self) -> None:
+    def test_vector_backend_creates_or_falls_back_to_sane_stl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             image_path = temp_path / "vector_backend_regression.png"
@@ -123,8 +124,8 @@ class GeometryRegressionTests(unittest.TestCase):
                 detail_mode="preserve_holes",
             )
 
-            backend_used = create_relief_stl(analysis, stl_path, vector_config)
-            self.assertIn(backend_used, {"vector_extrusion", "raster_heightfield"})
+            stl_result = create_relief_stl(analysis, stl_path, vector_config)
+            self.assertIn(stl_result.actual_backend, {"vector_extrusion", "raster_heightfield"})
 
             report = validate_stl_mesh(stl_path)
             self.assertTrue(report.exists)
@@ -134,6 +135,59 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertEqual(report.open_edge_count, 0)
             self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertEqual(report.failures, [])
+
+    def test_auto_vector_first_reports_fallback_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "auto_backend_regression.png"
+            output_mask = temp_path / "auto_backend_regression_silhouette.png"
+            stl_path = temp_path / "auto_backend_regression.stl"
+
+            self._create_regression_artwork(image_path)
+            analysis = analyze_image(image_path, output_mask, self.silhouette_config)
+            auto_config = replace(
+                self.stl_config,
+                stl_backend="auto_vector_first",
+                detail_mode="raised_details",
+            )
+
+            stl_result = create_relief_stl(analysis, stl_path, auto_config)
+            self.assertEqual(stl_result.requested_backend, "auto_vector_first")
+            self.assertEqual(stl_result.actual_backend, "raster_heightfield")
+            self.assertTrue(stl_result.fallback_used)
+            self.assertIn("supports silhouette and hole-preserving modes", stl_result.fallback_reason)
+
+            report = validate_stl_mesh(
+                stl_path,
+                requested_backend=stl_result.requested_backend,
+                actual_backend=stl_result.actual_backend,
+                fallback_reason=stl_result.fallback_reason,
+            )
+            self.assertTrue(report.fallback_used)
+            self.assertEqual(report.actual_backend, "raster_heightfield")
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.failures, [])
+
+    def test_colored_logo_foreground_survives_thresholding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "colored_logo.png"
+            output_mask = temp_path / "colored_logo_silhouette.png"
+
+            image = Image.new("RGBA", (180, 90), (255, 255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.line((12, 70, 160, 18), fill=(255, 80, 20, 255), width=9)
+            draw.line((45, 66, 86, 42), fill=(255, 110, 40, 255), width=4)
+            image.save(image_path)
+
+            analysis = analyze_image(
+                image_path,
+                output_mask,
+                replace(self.silhouette_config, detail_mode="preserve_holes"),
+            )
+
+            self.assertGreater(int(analysis.final_mask.sum()), 500)
+            self.assertGreaterEqual(len(analysis.vector_contours), 1)
 
     @staticmethod
     def _create_regression_artwork(path: Path) -> None:

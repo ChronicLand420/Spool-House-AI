@@ -425,8 +425,9 @@ class MainWindow(QMainWindow):
 
     def _backend_combo(self) -> QComboBox:
         combo = QComboBox()
-        combo.addItem("raster_heightfield - Stable/default", "raster_heightfield")
-        combo.addItem("vector_extrusion - Experimental/fallback-capable", "vector_extrusion")
+        combo.addItem("auto_vector_first - Try vector, fallback to raster", "auto_vector_first")
+        combo.addItem("vector_extrusion - Vector experimental", "vector_extrusion")
+        combo.addItem("raster_heightfield - Stable raster fallback", "raster_heightfield")
         index = combo.findData(self.config.stl.stl_backend)
         combo.setCurrentIndex(max(0, index))
         return combo
@@ -564,8 +565,23 @@ class MainWindow(QMainWindow):
             return
 
         bounds = report.get("bounding_box_mm")
+        requested_backend = report.get("requested_backend")
+        actual_backend = report.get("actual_backend")
+        if requested_backend:
+            self.logs.append(f"Mesh requested backend: {requested_backend}")
+        if actual_backend:
+            self.logs.append(f"Mesh actual backend: {actual_backend}")
+        if report.get("fallback_used"):
+            self.logs.append(f"Mesh fallback reason: {report.get('fallback_reason') or 'unknown'}")
         if bounds:
             self.logs.append(f"Mesh bounds mm: {bounds}")
+        self.logs.append(f"Mesh watertight: {report.get('watertight')}")
+        self.logs.append(
+            "Mesh edges: "
+            f"open={report.get('open_edge_count')}, "
+            f"overused={report.get('overused_edge_count')}, "
+            f"non_manifold={report.get('non_manifold_edge_count')}"
+        )
         for warning in report.get("warnings") or []:
             self.logs.append(f"Mesh warning: {warning}")
         for failure in report.get("failures") or []:

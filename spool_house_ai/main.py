@@ -42,8 +42,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stl-backend",
-        choices=["raster_heightfield", "vector_extrusion"],
-        help="Override the STL backend. raster_heightfield remains the safe default.",
+        choices=["auto_vector_first", "raster_heightfield", "vector_extrusion"],
+        help="Override the STL backend. auto_vector_first tries vector output and falls back to raster.",
     )
     parser.add_argument(
         "--debug",

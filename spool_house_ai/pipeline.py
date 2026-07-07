@@ -111,15 +111,22 @@ class ImagePipeline:
         stl_created = False
         try:
             _emit(stage_callback, "Mesh Forge", "active", "Generating printable mesh", svg_path)
-            stl_backend_used = create_relief_stl(analysis, stl_path, self.config.stl)
-            self.logger.info("STL backend used: %s", stl_backend_used)
-            if stl_backend_used != self.config.stl.stl_backend:
+            stl_result = create_relief_stl(analysis, stl_path, self.config.stl)
+            self.logger.info("STL backend requested: %s", stl_result.requested_backend)
+            self.logger.info("STL backend used: %s", stl_result.actual_backend)
+            if stl_result.fallback_used:
                 self.logger.warning(
-                    "Requested STL backend %s fell back to %s",
-                    self.config.stl.stl_backend,
-                    stl_backend_used,
+                    "Requested STL backend %s fell back to %s: %s",
+                    stl_result.requested_backend,
+                    stl_result.actual_backend,
+                    stl_result.fallback_reason,
                 )
-            mesh_report = validate_stl_mesh(stl_path)
+            mesh_report = validate_stl_mesh(
+                stl_path,
+                requested_backend=stl_result.requested_backend,
+                actual_backend=stl_result.actual_backend,
+                fallback_reason=stl_result.fallback_reason,
+            )
             write_mesh_report(mesh_report, mesh_report_path)
             if mesh_report.failures:
                 for failure in mesh_report.failures:
