@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from PIL import UnidentifiedImageError
 
@@ -11,7 +14,7 @@ from spool_house_ai.config import AppConfig
 from spool_house_ai.processing.analysis import analyze_image, save_mask
 from spool_house_ai.processing.background import background_removal_available, remove_background
 from spool_house_ai.processing.preview import create_preview, save_stage_previews
-from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh, write_mesh_report
+from spool_house_ai.processing.stl import MeshReport, StlCreationResult, create_relief_stl, validate_stl_mesh, write_mesh_report
 from spool_house_ai.processing.vectorize import create_svg
 
 
@@ -37,18 +40,45 @@ class ImagePipeline:
         svg_path = output_dir / f"{image_path.stem}.svg"
         stl_path = output_dir / f"{image_path.stem}.stl"
         mesh_report_path = output_dir / "mesh_report.json"
+        job_status_path = output_dir / "job_status.json"
         preview_path = output_dir / f"{image_path.stem}_preview.png"
         body_mask_path = output_dir / f"{image_path.stem}_body_mask.png"
         detail_mask_path = output_dir / f"{image_path.stem}_detail_mask.png"
         contour_debug_path = output_dir / f"{image_path.stem}_contour_debug.png"
         settings_path = output_dir / "job_settings.yaml"
+        warnings: list[str] = []
+        failures: list[str] = []
+        stl_result: StlCreationResult | None = None
+        mesh_report: MeshReport | None = None
+
+        def write_job_status() -> None:
+            try:
+                _write_job_status(
+                    job_status_path,
+                    config=self.config,
+                    image_path=image_path,
+                    output_dir=output_dir,
+                    svg_path=svg_path,
+                    stl_path=stl_path,
+                    mesh_report_path=mesh_report_path,
+                    job_status_path=job_status_path,
+                    stl_result=stl_result,
+                    mesh_report=mesh_report,
+                    warnings=warnings,
+                    failures=failures,
+                )
+                self.logger.info("Created job status: %s", job_status_path)
+            except Exception:
+                self.logger.exception("Failed to write job status for image: %s", image_path)
 
         self.logger.info("Processing image: %s", image_path.name)
         _emit(stage_callback, "Intake Room", "active", "Image queued for processing", image_path)
         if not self.config.pipeline.background_removal_enabled:
             self.logger.info("Background removal is disabled; using the original image as the cleaned PNG")
         elif not background_removal_available():
-            self.logger.warning("rembg is not installed; using the original image as the cleaned PNG")
+            message = "rembg is not installed; using the original image as the cleaned PNG"
+            warnings.append(message)
+            self.logger.warning(message)
 
         try:
             remove_background(
@@ -59,13 +89,19 @@ class ImagePipeline:
             self.logger.info("Cleanup stage complete: %s", cleaned_png_path)
             _emit(stage_callback, "Cleanup Lab", "done", "Cleaned image saved", cleaned_png_path)
         except (UnidentifiedImageError, OSError) as error:
+            failures.append(f"Skipped invalid image: {error}")
             self.logger.warning("Skipped invalid image %s: %s", image_path, error)
+            write_job_status()
             return False
         except ImportError as error:
+            failures.append(f"Missing dependency while cleaning image: {error}")
             self.logger.error("Missing dependency while cleaning image %s: %s", image_path, error)
+            write_job_status()
             return False
-        except Exception:
+        except Exception as error:
+            failures.append(f"Failed to clean image: {error}")
             self.logger.exception("Failed to clean image: %s", image_path)
+            write_job_status()
             return False
 
         try:
@@ -102,10 +138,14 @@ class ImagePipeline:
                 shutil.copyfile(preview_contours, contour_debug_path)
             _emit(stage_callback, "Vector Workshop", "done", "SVG created", svg_path)
         except ImportError as error:
+            failures.append(f"Missing dependency while analyzing image: {error}")
             self.logger.error("Missing dependency while analyzing image %s: %s", image_path, error)
+            write_job_status()
             return False
-        except Exception:
+        except Exception as error:
+            failures.append(f"Failed to create PNG/SVG outputs: {error}")
             self.logger.exception("Failed to create PNG/SVG outputs for image: %s", image_path)
+            write_job_status()
             return False
 
         stl_created = False
@@ -129,10 +169,12 @@ class ImagePipeline:
             )
             write_mesh_report(mesh_report, mesh_report_path)
             if mesh_report.failures:
+                failures.extend(mesh_report.failures)
                 for failure in mesh_report.failures:
                     self.logger.error("Mesh validation failure: %s", failure)
                 _emit(stage_callback, "Mesh Forge", "failed", f"Mesh report: {mesh_report_path}", mesh_report_path)
             elif mesh_report.warnings:
+                warnings.extend(mesh_report.warnings)
                 for warning in mesh_report.warnings:
                     self.logger.warning("Mesh validation warning: %s", warning)
                 self.logger.warning("Mesh report saved: %s", mesh_report_path)
@@ -143,9 +185,11 @@ class ImagePipeline:
             stl_created = not mesh_report.failures
             self.logger.info("Mesh stage complete: %s", stl_path)
         except ImportError as error:
+            failures.append(f"Missing dependency while generating STL: {error}")
             self.logger.error("Missing dependency while generating STL %s: %s", image_path, error)
             _emit(stage_callback, "Mesh Forge", "failed", f"Missing dependency: {error}", None)
-        except Exception:
+        except Exception as error:
+            failures.append(f"Failed to generate STL; PNG/SVG outputs were kept: {error}")
             self.logger.exception("Failed to generate STL for %s; PNG/SVG outputs were kept", image_path)
             _emit(stage_callback, "Mesh Forge", "failed", "STL generation failed; PNG/SVG kept", None)
 
@@ -153,10 +197,12 @@ class ImagePipeline:
             _emit(stage_callback, "Render Bay", "active", "Rendering previews", silhouette_png_path)
             create_preview(silhouette_png_path, preview_path, self.config.preview)
             _emit(stage_callback, "Render Bay", "done", "Preview rendered", preview_path)
-        except Exception:
+        except Exception as error:
+            warnings.append(f"Failed to create final preview: {error}")
             self.logger.exception("Failed to create final preview for image: %s", image_path)
 
         _write_job_settings(settings_path, self.config)
+        write_job_status()
         _emit(stage_callback, "Output Vault", "done", "Output folder is ready", output_dir)
 
         self.logger.info("Created cleaned PNG: %s", cleaned_png_path)
@@ -225,3 +271,81 @@ def _write_job_settings(path: Path, config: AppConfig) -> None:
         f"  island_near_body_distance_px: {config.silhouette.island_near_body_distance_px}",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_job_status(
+    path: Path,
+    *,
+    config: AppConfig,
+    image_path: Path,
+    output_dir: Path,
+    svg_path: Path,
+    stl_path: Path,
+    mesh_report_path: Path,
+    job_status_path: Path,
+    stl_result: StlCreationResult | None,
+    mesh_report: MeshReport | None,
+    warnings: list[str],
+    failures: list[str],
+) -> None:
+    payload = {
+        "app_version": _load_app_version(config.project_root),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input_file_path": str(image_path),
+        "output_folder_path": str(output_dir),
+        "svg_path": str(svg_path),
+        "stl_path": str(stl_path),
+        "mesh_report_path": str(mesh_report_path),
+        "job_status_path": str(job_status_path),
+        "requested_backend": stl_result.requested_backend if stl_result else config.stl.stl_backend,
+        "actual_backend": stl_result.actual_backend if stl_result else "",
+        "fallback_used": stl_result.fallback_used if stl_result else False,
+        "fallback_reason": stl_result.fallback_reason if stl_result else "",
+        "product_mode": config.stl.product_mode,
+        "detail_mode": config.stl.detail_mode,
+        "dimensions": {
+            "output_scale_mm": config.stl.output_scale_mm,
+            "base_height_mm": config.stl.base_height_mm,
+            "extrusion_height_mm": config.stl.extrusion_height_mm,
+            "detail_height_mm": config.stl.detail_height_mm,
+            "engraving_depth_mm": config.stl.engraving_depth_mm,
+            "keychain_hole_diameter_mm": config.stl.keychain_hole_diameter_mm,
+        },
+        "settings_used": {
+            "pipeline": asdict(config.pipeline),
+            "silhouette": asdict(config.silhouette),
+            "svg": asdict(config.svg),
+            "stl": asdict(config.stl),
+        },
+        "warnings": warnings,
+        "failures": failures,
+        "mesh_summary": _mesh_summary(mesh_report),
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _mesh_summary(mesh_report: MeshReport | None) -> dict[str, Any]:
+    if mesh_report is None:
+        return {}
+    return {
+        "exists": mesh_report.exists,
+        "file_size_bytes": mesh_report.file_size_bytes,
+        "vertex_count": mesh_report.vertex_count,
+        "face_count": mesh_report.face_count,
+        "bounding_box_mm": mesh_report.bounding_box_mm,
+        "empty_mesh": mesh_report.empty_mesh,
+        "invalid_bounds": mesh_report.invalid_bounds,
+        "watertight": mesh_report.watertight,
+        "open_edge_count": mesh_report.open_edge_count,
+        "overused_edge_count": mesh_report.overused_edge_count,
+        "non_manifold_edge_count": mesh_report.non_manifold_edge_count,
+        "warnings": mesh_report.warnings,
+        "failures": mesh_report.failures,
+    }
+
+
+def _load_app_version(project_root: Path) -> str:
+    version_path = project_root / "VERSION"
+    if not version_path.exists():
+        return ""
+    return version_path.read_text(encoding="utf-8").strip()

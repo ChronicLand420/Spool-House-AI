@@ -106,6 +106,7 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
         output_dir / f"{test_image.stem}_preview_svg.png",
         output_dir / f"{test_image.stem}_preview_stl.png",
         output_dir / "mesh_report.json",
+        output_dir / "job_status.json",
     ]
     missing = [path for path in expected_outputs if not path.exists()]
     if missing:
@@ -127,6 +128,7 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
         geometry_output_dir / f"{geometry_image.stem}.svg",
         geometry_output_dir / f"{geometry_image.stem}.stl",
         geometry_output_dir / "mesh_report.json",
+        geometry_output_dir / "job_status.json",
     ]
     missing_geometry = [path for path in geometry_expected if not path.exists()]
     if missing_geometry:
@@ -205,6 +207,7 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
         v5_output_dir / f"{v5_image.stem}_detail_mask.png",
         v5_output_dir / f"{v5_image.stem}.stl",
         v5_output_dir / "mesh_report.json",
+        v5_output_dir / "job_status.json",
     ]
     missing_v5 = [path for path in v5_expected if not path.exists()]
     if missing_v5:

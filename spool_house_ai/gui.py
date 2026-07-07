@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.current_output_dir: Path | None = None
         self.current_stem = ""
         self.rooms: dict[str, RoomCard] = {}
+        self.log_expanded = False
         self.version = _load_version(self.config.project_root)
         self.setWindowTitle("Spool House AI")
         self.resize(1360, 820)
@@ -220,25 +221,38 @@ class MainWindow(QMainWindow):
         main_splitter.setSizes([300, 650, 430])
 
         log_panel = QWidget()
+        self.log_panel = log_panel
         log_layout = QVBoxLayout(log_panel)
         log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.setSpacing(6)
+        log_header = QHBoxLayout()
         log_title = QLabel("Status Log")
         log_title.setObjectName("sectionTitle")
-        log_layout.addWidget(log_title)
+        self.log_summary = QLabel("Ready")
+        self.log_summary.setObjectName("statusSummary")
+        self.log_summary.setWordWrap(False)
+        self.log_toggle_button = QPushButton("Show Log")
+        self.log_toggle_button.setObjectName("secondaryButton")
+        self.log_toggle_button.setFixedWidth(96)
+        self.log_toggle_button.clicked.connect(self.toggle_log)
+        log_header.addWidget(log_title)
+        log_header.addWidget(self.log_summary, 1)
+        log_header.addWidget(self.log_toggle_button)
+        log_layout.addLayout(log_header)
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
-        self.logs.setMinimumHeight(72)
-        self.logs.setMaximumHeight(210)
+        self.logs.setMinimumHeight(96)
+        self.logs.setMaximumHeight(190)
         log_layout.addWidget(self.logs)
 
-        vertical_splitter = QSplitter(Qt.Vertical)
-        vertical_splitter.addWidget(main_splitter)
-        vertical_splitter.addWidget(log_panel)
-        vertical_splitter.setChildrenCollapsible(False)
-        vertical_splitter.setSizes([660, 130])
-        root.addWidget(vertical_splitter, 1)
+        self.vertical_splitter = QSplitter(Qt.Vertical)
+        self.vertical_splitter.addWidget(main_splitter)
+        self.vertical_splitter.addWidget(log_panel)
+        self.vertical_splitter.setChildrenCollapsible(False)
+        root.addWidget(self.vertical_splitter, 1)
         self.setCentralWidget(central)
         self._apply_style()
+        self.set_log_expanded(False)
 
     def _left_panel(self) -> QWidget:
         scroll = QScrollArea()
@@ -265,12 +279,30 @@ class MainWindow(QMainWindow):
         self.open_stl_button = QPushButton("Open STL")
         self.open_svg_button = QPushButton("Open SVG")
         self.open_preview_button = QPushButton("Open Preview")
-        for button in [self.open_output_button, self.open_stl_button, self.open_svg_button, self.open_preview_button]:
+        self.copy_svg_button = QPushButton("Copy SVG Path")
+        self.copy_stl_button = QPushButton("Copy STL Path")
+        self.copy_mesh_report_button = QPushButton("Copy Mesh Report Path")
+        self.copy_job_status_button = QPushButton("Copy Job Status Path")
+        self.output_buttons = [
+            self.open_output_button,
+            self.open_stl_button,
+            self.open_svg_button,
+            self.open_preview_button,
+            self.copy_svg_button,
+            self.copy_stl_button,
+            self.copy_mesh_report_button,
+            self.copy_job_status_button,
+        ]
+        for button in self.output_buttons:
             button.setEnabled(False)
         self.open_output_button.clicked.connect(lambda: self.open_path(self.current_output_dir))
         self.open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
         self.open_svg_button.clicked.connect(lambda: self.open_named_output(".svg"))
         self.open_preview_button.clicked.connect(lambda: self.open_named_output("_preview.png"))
+        self.copy_svg_button.clicked.connect(lambda: self.copy_named_output(".svg"))
+        self.copy_stl_button.clicked.connect(lambda: self.copy_named_output(".stl"))
+        self.copy_mesh_report_button.clicked.connect(lambda: self.copy_output_path("mesh_report.json"))
+        self.copy_job_status_button.clicked.connect(lambda: self.copy_output_path("job_status.json"))
         queue_title = QLabel("Image Queue")
         queue_title.setObjectName("sectionTitle")
         layout.addWidget(queue_title)
@@ -283,10 +315,18 @@ class MainWindow(QMainWindow):
         output_title = QLabel("Outputs")
         output_title.setObjectName("sectionTitle")
         layout.addWidget(output_title)
-        layout.addWidget(self.open_output_button)
-        layout.addWidget(self.open_stl_button)
-        layout.addWidget(self.open_svg_button)
-        layout.addWidget(self.open_preview_button)
+        output_grid = QGridLayout()
+        output_grid.setHorizontalSpacing(8)
+        output_grid.setVerticalSpacing(8)
+        output_grid.addWidget(self.open_output_button, 0, 0, 1, 2)
+        output_grid.addWidget(self.open_stl_button, 1, 0)
+        output_grid.addWidget(self.open_svg_button, 1, 1)
+        output_grid.addWidget(self.open_preview_button, 2, 0, 1, 2)
+        output_grid.addWidget(self.copy_stl_button, 3, 0)
+        output_grid.addWidget(self.copy_svg_button, 3, 1)
+        output_grid.addWidget(self.copy_mesh_report_button, 4, 0, 1, 2)
+        output_grid.addWidget(self.copy_job_status_button, 5, 0, 1, 2)
+        layout.addLayout(output_grid)
         review_title = QLabel("Review")
         review_title.setObjectName("sectionTitle")
         layout.addWidget(review_title)
@@ -346,8 +386,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
         self.stl_backend = self._backend_combo()
-        self.product_mode = self._combo(["flat_relief", "keychain", "wall_art"])
-        self.detail_mode = self._combo(["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"])
+        self.product_mode = self._combo(["flat_relief", "keychain", "wall_art"], self.config.stl.product_mode)
+        self.detail_mode = self._combo(
+            ["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"],
+            self.config.stl.detail_mode,
+        )
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
         self.base_height = self._double_spin(0.2, 10.0, self.config.stl.base_height_mm)
         self.threshold = self._spin(0, 255, self.config.silhouette.threshold_value)
@@ -403,9 +446,13 @@ class MainWindow(QMainWindow):
         scroll.setWidget(panel)
         return scroll
 
-    def _combo(self, values: list[str]) -> QComboBox:
+    def _combo(self, values: list[str], current_value: str | None = None) -> QComboBox:
         combo = QComboBox()
         combo.addItems(values)
+        if current_value is not None:
+            index = combo.findText(current_value)
+            if index >= 0:
+                combo.setCurrentIndex(index)
         return combo
 
     def _form_group(self, title: str, rows: list[tuple[str, QWidget]]) -> QGroupBox:
@@ -468,6 +515,7 @@ class MainWindow(QMainWindow):
         self._append_status_path("Selected input", image_path)
         self.logs.append(f"Requested STL backend: {self._selected_stl_backend()}")
         self.logs.append("Queue mode: processing the first queued item only.")
+        self._set_status_summary(f"Running - backend {self._selected_stl_backend()}")
         self.reset_rooms()
         self.generate_button.setEnabled(False)
         config = self._config_from_controls()
@@ -508,6 +556,7 @@ class MainWindow(QMainWindow):
             base_height_mm=self.base_height.value(),
             detail_height_mm=self.detail_height.value(),
             engraving_depth_mm=self.engraving_depth.value(),
+            preserve_holes=self.preserve_holes.isChecked(),
             add_keychain_hole=self.keychain_hole.isChecked(),
             keychain_hole_diameter_mm=self.keychain_diameter.value(),
             output_scale_mm=self.output_scale.value(),
@@ -522,15 +571,19 @@ class MainWindow(QMainWindow):
         self.current_output_dir = Path(output_dir)
         self.current_stem = stem
         self.generate_button.setEnabled(True)
-        for button in [self.open_output_button, self.open_stl_button, self.open_svg_button, self.open_preview_button]:
-            button.setEnabled(True)
+        self._update_output_buttons()
         mesh_report_path = self.current_output_dir / "mesh_report.json"
+        job_status_path = self.current_output_dir / "job_status.json"
         self._append_status_path("Input file", Path(input_path))
         self._append_status_path("Output folder", self.current_output_dir)
         self.logs.append(f"Requested STL backend: {requested_backend}")
         if mesh_report_path.exists():
             self._append_status_path("Mesh report", mesh_report_path)
             self._append_mesh_report_summary(mesh_report_path)
+        if job_status_path.exists():
+            self._append_status_path("Job status", job_status_path)
+        if not mesh_report_path.exists():
+            self._set_status_summary("Done" if ok else "Warnings - check log")
         self.logs.append("Job complete." if ok else "Job complete with warnings. Check logs.")
         self.refresh_review()
 
@@ -539,14 +592,73 @@ class MainWindow(QMainWindow):
             room.set_state("idle", "Idle", None)
 
     def open_named_output(self, suffix: str) -> None:
+        self.open_path(self._named_output_path(suffix))
+
+    def copy_named_output(self, suffix: str) -> None:
+        self.copy_path(self._named_output_path(suffix))
+
+    def copy_output_path(self, filename: str) -> None:
         if not self.current_output_dir:
             return
+        self.copy_path(self.current_output_dir / filename)
+
+    def _named_output_path(self, suffix: str) -> Path | None:
+        if not self.current_output_dir:
+            return None
         name = f"{self.current_stem}{suffix}" if suffix.startswith("_") else f"{self.current_stem}{suffix}"
-        self.open_path(self.current_output_dir / name)
+        return self.current_output_dir / name
 
     def open_path(self, path: Path | None) -> None:
         if path and path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def copy_path(self, path: Path | None) -> None:
+        if path and path.exists():
+            QApplication.clipboard().setText(str(path))
+            self._append_status_path("Copied path", path)
+
+    def _update_output_buttons(self) -> None:
+        if not self.current_output_dir:
+            for button in self.output_buttons:
+                button.setEnabled(False)
+            return
+        svg_path = self._named_output_path(".svg")
+        stl_path = self._named_output_path(".stl")
+        preview_path = self._named_output_path("_preview.png")
+        mesh_report_path = self.current_output_dir / "mesh_report.json"
+        job_status_path = self.current_output_dir / "job_status.json"
+        availability = {
+            self.open_output_button: self.current_output_dir.exists(),
+            self.open_stl_button: bool(stl_path and stl_path.exists()),
+            self.open_svg_button: bool(svg_path and svg_path.exists()),
+            self.open_preview_button: bool(preview_path and preview_path.exists()),
+            self.copy_stl_button: bool(stl_path and stl_path.exists()),
+            self.copy_svg_button: bool(svg_path and svg_path.exists()),
+            self.copy_mesh_report_button: mesh_report_path.exists(),
+            self.copy_job_status_button: job_status_path.exists(),
+        }
+        for button, enabled in availability.items():
+            button.setEnabled(enabled)
+
+    def toggle_log(self) -> None:
+        self.set_log_expanded(not self.log_expanded)
+
+    def set_log_expanded(self, expanded: bool) -> None:
+        self.log_expanded = expanded
+        self.logs.setVisible(expanded)
+        self.log_toggle_button.setText("Hide Log" if expanded else "Show Log")
+        if expanded:
+            self.log_panel.setMinimumHeight(150)
+            self.log_panel.setMaximumHeight(260)
+            self.vertical_splitter.setSizes([610, 190])
+        else:
+            self.log_panel.setMinimumHeight(44)
+            self.log_panel.setMaximumHeight(58)
+            self.vertical_splitter.setSizes([760, 48])
+
+    def _set_status_summary(self, text: str, tooltip: str | None = None) -> None:
+        self.log_summary.setText(_elide_text(self.log_summary, text, reserve_px=20))
+        self.log_summary.setToolTip(tooltip or text)
 
     def _selected_stl_backend(self) -> str:
         data = self.stl_backend.currentData()
@@ -586,6 +698,20 @@ class MainWindow(QMainWindow):
             self.logs.append(f"Mesh warning: {warning}")
         for failure in report.get("failures") or []:
             self.logs.append(f"Mesh failure: {failure}")
+        warning_count = len(report.get("warnings") or [])
+        failure_count = len(report.get("failures") or [])
+        mesh_result = "watertight" if report.get("watertight") else "not watertight"
+        if failure_count:
+            job_state = "Failed"
+        elif warning_count:
+            job_state = "Warning"
+        else:
+            job_state = "Done"
+        summary = (
+            f"{job_state} - backend {actual_backend or requested_backend or 'unknown'} - "
+            f"mesh {mesh_result} - warnings {warning_count}"
+        )
+        self._set_status_summary(summary, tooltip=summary)
 
     def refresh_review(self) -> None:
         if not self.current_output_dir or not self.current_output_dir.exists():
@@ -623,6 +749,7 @@ class MainWindow(QMainWindow):
             #creatorCredit { color: #9aa4b2; font-size: 9pt; padding: 0 8px 8px 8px; }
             #sectionTitle { color: #f2f4f7; font-size: 12pt; font-weight: 700; margin-top: 6px; }
             #mutedText { color: #9aa4b2; font-size: 9pt; }
+            #statusSummary { color: #c7d0dd; font-size: 9.5pt; padding: 8px 10px 0 10px; }
             #sidePanel { background: #181b22; border: 1px solid #2a303a; border-radius: 8px; }
             QScrollArea { border: 0; background: #111318; }
             QSplitter::handle { background: #1c212b; width: 5px; height: 5px; }
