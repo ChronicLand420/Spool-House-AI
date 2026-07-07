@@ -9,7 +9,7 @@ from spool_house_ai.logging_setup import configure_logging
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Spool House AI image-to-STL automation.")
+    parser = argparse.ArgumentParser(description="Spool House Studio image-to-STL automation.")
     parser.add_argument(
         "--config",
         default="config/config.yaml",
@@ -84,7 +84,7 @@ def main() -> None:
 
     pipeline = ImagePipeline(config=config, logger=logger)
 
-    logger.info("Spool House AI started")
+    logger.info("Spool House Studio started")
     logger.info("Input folder: %s", config.input_dir)
     logger.info("Output folder: %s", config.output_dir)
 

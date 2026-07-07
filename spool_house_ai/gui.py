@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import QThread, Qt, QUrl, Signal
+    from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
     from PySide6.QtGui import QDesktopServices, QFontMetrics, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
@@ -55,6 +56,8 @@ ROOMS = [
     "Render Bay",
     "Output Vault",
 ]
+
+APP_DISPLAY_NAME = "Spool House Studio"
 
 
 def _elide_text(widget: QWidget, text: str, reserve_px: int = 24) -> str:
@@ -193,8 +196,19 @@ class MainWindow(QMainWindow):
         self.current_stem = ""
         self.rooms: dict[str, RoomCard] = {}
         self.log_expanded = False
+        self.pending_jobs: list[Path] = []
+        self.batch_total = 0
+        self.batch_index = 0
+        self.batch_success_count = 0
+        self.batch_failure_count = 0
+        self.current_stage = "Waiting"
+        self.current_stage_progress_index = 0
+        self.batch_started_at = 0.0
+        self.runtime_timer = QTimer(self)
+        self.runtime_timer.setInterval(1000)
+        self.runtime_timer.timeout.connect(self.update_runtime_status)
         self.version = _load_version(self.config.project_root)
-        self.setWindowTitle("Spool House AI")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(1360, 820)
         self._build_ui()
 
@@ -202,7 +216,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
 
-        title = QLabel("Spool House AI")
+        title = QLabel(APP_DISPLAY_NAME)
         title.setObjectName("appTitle")
         root.addWidget(title)
         if self.version:
@@ -275,6 +289,9 @@ class MainWindow(QMainWindow):
         self.generate_button = QPushButton("Generate Product")
         self.generate_button.setObjectName("primaryButton")
         self.generate_button.clicked.connect(self.generate)
+        self.generate_all_button = QPushButton("Generate All")
+        self.generate_all_button.setObjectName("secondaryButton")
+        self.generate_all_button.clicked.connect(self.generate_all)
         self.open_output_button = QPushButton("Open Output Folder")
         self.open_stl_button = QPushButton("Open STL")
         self.open_svg_button = QPushButton("Open SVG")
@@ -306,12 +323,16 @@ class MainWindow(QMainWindow):
         queue_title = QLabel("Image Queue")
         queue_title.setObjectName("sectionTitle")
         layout.addWidget(queue_title)
-        queue_note = QLabel("Generate processes the first queued item.")
+        queue_note = QLabel("Generate processes the selected item, or the first item if nothing is selected.")
         queue_note.setObjectName("mutedText")
+        queue_note.setWordWrap(True)
         layout.addWidget(queue_note)
         layout.addWidget(add_button)
         layout.addWidget(self.queue, 1)
-        layout.addWidget(self.generate_button)
+        generate_row = QHBoxLayout()
+        generate_row.addWidget(self.generate_button)
+        generate_row.addWidget(self.generate_all_button)
+        layout.addLayout(generate_row)
         output_title = QLabel("Outputs")
         output_title.setObjectName("sectionTitle")
         layout.addWidget(output_title)
@@ -505,25 +526,76 @@ class MainWindow(QMainWindow):
 
     def generate(self) -> None:
         if self.worker and self.worker.isRunning():
-            QMessageBox.information(self, "Spool House AI", "A job is already running.")
+            QMessageBox.information(self, APP_DISPLAY_NAME, "A job is already running.")
             return
         if self.queue.count() == 0:
-            QMessageBox.information(self, "Spool House AI", "Add an image first.")
+            QMessageBox.information(self, APP_DISPLAY_NAME, "Add an image first.")
             return
-        first_item = self.queue.item(0)
-        image_path = Path(first_item.data(Qt.UserRole) or first_item.text())
+        image_path = self._selected_or_first_image()
+        if image_path is None:
+            QMessageBox.information(self, APP_DISPLAY_NAME, "Add an image first.")
+            return
+        self._start_jobs([image_path], batch_mode=False)
+
+    def generate_all(self) -> None:
+        if self.worker and self.worker.isRunning():
+            QMessageBox.information(self, APP_DISPLAY_NAME, "A job is already running.")
+            return
+        jobs = self._all_queue_images()
+        if not jobs:
+            QMessageBox.information(self, APP_DISPLAY_NAME, "Add images first.")
+            return
+        self._start_jobs(jobs, batch_mode=True)
+
+    def _start_jobs(self, jobs: list[Path], batch_mode: bool) -> None:
+        self.pending_jobs = jobs
+        self.batch_total = len(jobs)
+        self.batch_index = 0
+        self.batch_success_count = 0
+        self.batch_failure_count = 0
+        self.batch_started_at = time.monotonic()
+        self.current_stage = "Waiting"
+        self.current_stage_progress_index = 0
+        self.runtime_timer.start()
+        self._set_processing_buttons_enabled(False)
+        mode_text = "all queued items" if batch_mode else "one selected item"
+        self.logs.append(f"Queue mode: processing {mode_text}.")
+        self._start_next_job()
+
+    def _start_next_job(self) -> None:
+        if self.batch_index >= self.batch_total:
+            self._finish_batch()
+            return
+        image_path = self.pending_jobs[self.batch_index]
         self._append_status_path("Selected input", image_path)
         self.logs.append(f"Requested STL backend: {self._selected_stl_backend()}")
-        self.logs.append("Queue mode: processing the first queued item only.")
-        self._set_status_summary(f"Running - backend {self._selected_stl_backend()}")
+        self.current_stage = "Intake Room"
+        self.current_stage_progress_index = 0
+        self.update_runtime_status()
         self.reset_rooms()
-        self.generate_button.setEnabled(False)
         config = self._config_from_controls()
         self.worker = PipelineWorker(config, image_path)
         self.worker.stage_changed.connect(self.update_room)
         self.worker.log_line.connect(self.logs.append)
         self.worker.finished_job.connect(self.job_finished)
         self.worker.start()
+
+    def _selected_or_first_image(self) -> Path | None:
+        item = self.queue.currentItem() or self.queue.item(0)
+        if item is None:
+            return None
+        return Path(item.data(Qt.UserRole) or item.text())
+
+    def _all_queue_images(self) -> list[Path]:
+        jobs: list[Path] = []
+        for index in range(self.queue.count()):
+            item = self.queue.item(index)
+            jobs.append(Path(item.data(Qt.UserRole) or item.text()))
+        return jobs
+
+    def _set_processing_buttons_enabled(self, enabled: bool) -> None:
+        self.generate_button.setEnabled(enabled)
+        self.generate_all_button.setEnabled(enabled)
 
     def _config_from_controls(self) -> AppConfig:
         product_mode = self.product_mode.currentText()
@@ -566,11 +638,14 @@ class MainWindow(QMainWindow):
     def update_room(self, room: str, state: str, message: str, thumbnail: str) -> None:
         if room in self.rooms:
             self.rooms[room].set_state(state, message, Path(thumbnail) if thumbnail else None)
+            room_index = ROOMS.index(room)
+            self.current_stage = room
+            self.current_stage_progress_index = room_index + (1 if state in {"done", "failed"} else 0)
+            self.update_runtime_status()
 
     def job_finished(self, ok: bool, output_dir: str, stem: str, input_path: str, requested_backend: str) -> None:
         self.current_output_dir = Path(output_dir)
         self.current_stem = stem
-        self.generate_button.setEnabled(True)
         self._update_output_buttons()
         mesh_report_path = self.current_output_dir / "mesh_report.json"
         job_status_path = self.current_output_dir / "job_status.json"
@@ -584,8 +659,32 @@ class MainWindow(QMainWindow):
             self._append_status_path("Job status", job_status_path)
         if not mesh_report_path.exists():
             self._set_status_summary("Done" if ok else "Warnings - check log")
-        self.logs.append("Job complete." if ok else "Job complete with warnings. Check logs.")
+        if ok:
+            self.batch_success_count += 1
+            self.logs.append("Job complete.")
+        else:
+            self.batch_failure_count += 1
+            self.logs.append("Job complete with warnings or failures. Continuing if batch jobs remain.")
         self.refresh_review()
+        self.batch_index += 1
+        if self.batch_index < self.batch_total:
+            self.logs.append(f"Starting next queued image ({self.batch_index + 1}/{self.batch_total}).")
+            self._start_next_job()
+        else:
+            self._finish_batch()
+
+    def _finish_batch(self) -> None:
+        self.runtime_timer.stop()
+        elapsed = time.monotonic() - self.batch_started_at if self.batch_started_at else 0.0
+        total = self.batch_total
+        summary = (
+            f"Done - {self.batch_success_count}/{total} succeeded - "
+            f"{self.batch_failure_count} warnings/failures - elapsed {_format_duration(elapsed)}"
+        )
+        self._set_status_summary(summary, tooltip=summary)
+        self.logs.append(f"Batch complete: {self.batch_success_count}/{total} succeeded; elapsed {_format_duration(elapsed)}.")
+        self._set_processing_buttons_enabled(True)
+        self.worker = None
 
     def reset_rooms(self) -> None:
         for room in self.rooms.values():
@@ -655,6 +754,24 @@ class MainWindow(QMainWindow):
             self.log_panel.setMinimumHeight(44)
             self.log_panel.setMaximumHeight(58)
             self.vertical_splitter.setSizes([760, 48])
+
+    def update_runtime_status(self) -> None:
+        if self.batch_total <= 0 or not self.runtime_timer.isActive():
+            return
+        elapsed = time.monotonic() - self.batch_started_at if self.batch_started_at else 0.0
+        completed_jobs = min(self.batch_index, self.batch_total)
+        stage_fraction = min(max(self.current_stage_progress_index / max(1, len(ROOMS)), 0.0), 0.99)
+        progress = min(0.99, (completed_jobs + stage_fraction) / max(1, self.batch_total))
+        eta_text = "estimating..."
+        if progress >= 0.08:
+            remaining = max(0.0, elapsed * (1.0 - progress) / progress)
+            eta_text = _format_duration(remaining)
+        item_text = f"{min(self.batch_index + 1, self.batch_total)}/{self.batch_total}"
+        summary = (
+            f"Running {item_text} - {self.current_stage} - "
+            f"elapsed {_format_duration(elapsed)} - ETA {eta_text}"
+        )
+        self._set_status_summary(summary, tooltip=summary)
 
     def _set_status_summary(self, text: str, tooltip: str | None = None) -> None:
         self.log_summary.setText(_elide_text(self.log_summary, text, reserve_px=20))
@@ -791,6 +908,15 @@ def _load_version(project_root: Path) -> str:
     if not version_path.exists():
         return ""
     return version_path.read_text(encoding="utf-8").strip()
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 if __name__ == "__main__":

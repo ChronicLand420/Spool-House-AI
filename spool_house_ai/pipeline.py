@@ -6,6 +6,7 @@ import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable
 
 from PIL import UnidentifiedImageError
@@ -27,6 +28,8 @@ class ImagePipeline:
         self.logger = logger
 
     def process(self, image_path: Path, stage_callback: StageCallback | None = None) -> bool:
+        started_at = datetime.now(timezone.utc)
+        started_timer = perf_counter()
         image_path = image_path.resolve()
         if not image_path.exists():
             self.logger.warning("Skipped missing file: %s", image_path)
@@ -38,6 +41,7 @@ class ImagePipeline:
         cleaned_png_path = output_dir / f"{image_path.stem}_cleaned.png"
         silhouette_png_path = output_dir / f"{image_path.stem}_silhouette.png"
         svg_path = output_dir / f"{image_path.stem}.svg"
+        review_svg_path = output_dir / f"{image_path.stem}_review.svg"
         stl_path = output_dir / f"{image_path.stem}.stl"
         mesh_report_path = output_dir / "mesh_report.json"
         job_status_path = output_dir / "job_status.json"
@@ -59,6 +63,7 @@ class ImagePipeline:
                     image_path=image_path,
                     output_dir=output_dir,
                     svg_path=svg_path,
+                    review_svg_path=review_svg_path,
                     stl_path=stl_path,
                     mesh_report_path=mesh_report_path,
                     job_status_path=job_status_path,
@@ -66,6 +71,9 @@ class ImagePipeline:
                     mesh_report=mesh_report,
                     warnings=warnings,
                     failures=failures,
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                    duration_seconds=perf_counter() - started_timer,
                 )
                 self.logger.info("Created job status: %s", job_status_path)
             except Exception:
@@ -121,8 +129,20 @@ class ImagePipeline:
             )
             _emit(stage_callback, "Detail Analyzer", "done", "Analysis masks created", body_mask_path)
             _emit(stage_callback, "Vector Workshop", "active", "Writing editable SVG paths", silhouette_png_path)
-            create_svg(analysis, svg_path, self.config.svg)
+            create_svg(
+                analysis,
+                svg_path,
+                self.config.svg,
+                metadata={
+                    "app_version": _load_app_version(self.config.project_root),
+                    "input_filename": image_path.name,
+                    "product_mode": self.config.stl.product_mode,
+                    "detail_mode": self.config.stl.detail_mode,
+                },
+                review_output_path=review_svg_path,
+            )
             self.logger.info("Vector stage complete: %s", svg_path)
+            self.logger.info("Review SVG created: %s", review_svg_path)
             save_stage_previews(
                 original_path=image_path,
                 cleaned_png_path=cleaned_png_path,
@@ -207,6 +227,7 @@ class ImagePipeline:
 
         self.logger.info("Created cleaned PNG: %s", cleaned_png_path)
         self.logger.info("Created SVG: %s", svg_path)
+        self.logger.info("Created review SVG: %s", review_svg_path)
         if stl_created:
             self.logger.info("Created STL: %s", stl_path)
             self.logger.info("Created mesh report: %s", mesh_report_path)
@@ -280,6 +301,7 @@ def _write_job_status(
     image_path: Path,
     output_dir: Path,
     svg_path: Path,
+    review_svg_path: Path,
     stl_path: Path,
     mesh_report_path: Path,
     job_status_path: Path,
@@ -287,13 +309,20 @@ def _write_job_status(
     mesh_report: MeshReport | None,
     warnings: list[str],
     failures: list[str],
+    started_at: datetime,
+    finished_at: datetime,
+    duration_seconds: float,
 ) -> None:
     payload = {
         "app_version": _load_app_version(config.project_root),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_seconds": round(duration_seconds, 3),
         "input_file_path": str(image_path),
         "output_folder_path": str(output_dir),
         "svg_path": str(svg_path),
+        "review_svg_path": str(review_svg_path),
         "stl_path": str(stl_path),
         "mesh_report_path": str(mesh_report_path),
         "job_status_path": str(job_status_path),

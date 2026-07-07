@@ -1,6 +1,6 @@
-# Spool House AI
+# Spool House Studio
 
-Spool House AI automates image-to-product preparation for simple 3D printable STL files. V3 adds a real PySide6 desktop app on top of the existing CLI, plus richer image analysis for body masks, true holes, internal detail strokes, and color-region relief experiments.
+Spool House Studio automates image-to-product preparation for simple 3D printable STL files. It is part of the Spool House AI / SHAI project and keeps the internal `spool_house_ai` package name for compatibility.
 
 Created by ChronicLand420.
 
@@ -41,8 +41,9 @@ The app supports:
 - Drag/drop PNG or JPG files into the queue.
 - Click `Add Image` to browse for files.
 - Choose product and detail settings.
-- Click `Generate Product`.
+- Click `Generate Product` for the selected/first queued file, or `Generate All` to process the queue one image at a time.
 - Watch rooms light up as stages run: Intake Room, Cleanup Lab, Detail Analyzer, Vector Workshop, Mesh Forge, Render Bay, and Output Vault.
+- See elapsed time, rough ETA, and batch item count in the status strip while jobs run.
 - Open the output folder, STL, SVG, or preview after generation.
 
 The visual theme is an original underground maker bunker/factory interface. It does not use Fallout Shelter assets, names, characters, or copied art.
@@ -122,6 +123,19 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+Check that the active Python environment is the one you expect:
+
+```powershell
+python scripts/check_environment.py
+```
+
+On Windows, prefer the virtual environment Python explicitly if `python` resolves to another app's bundled runtime:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/check_environment.py
+.\.venv\Scripts\python.exe -m spool_house_ai.gui
+```
+
 Launch the desktop app:
 
 ```powershell
@@ -188,7 +202,7 @@ python -m spool_house_ai.main --once --product-mode keychain --threshold 145 --h
 
 ## Outputs
 
-For `example.png`, Spool House AI writes:
+For `example.png`, Spool House Studio writes:
 
 ```text
 output/example/
@@ -199,6 +213,7 @@ output/example/
   example_detail_mask.png
   example_contour_debug.png
   example.svg
+  example_review.svg
   example.stl
   example_preview.png
   example_preview_original.png
@@ -211,8 +226,11 @@ output/example/
   example_preview_svg.png
   example_preview_stl.png
   mesh_report.json
+  job_status.json
   job_settings.yaml
 ```
+
+`example.svg` is the normal editable vector output. `example_review.svg` adds visible inspection layers for foreground/body contours, holes, preserved details, and ignored islands so the artwork is easier to inspect in Inkscape before STL export.
 
 The contour debug preview uses:
 
@@ -309,7 +327,7 @@ stl:
 
 Use `upscale_factor: 4` for cleaner curves on small logos, at the cost of slower processing. Increase `simplify_tolerance` and `collinear_merge_tolerance` to clean straight logo edges; lower them if small corners disappear. `vectorizer_backend` can be set to `potrace` or `inkscape`, but the app falls back to OpenCV tracing when those tools are not installed.
 
-Safe smoothing is enabled by default. The `conservative` profile rejects contour cleanup that changes area, bounding box, aspect ratio, or removes too many points. If a contour fails those checks, Spool House AI falls back to the less-smoothed contour instead of turning the artwork into a blob.
+Safe smoothing is enabled by default. The `conservative` profile rejects contour cleanup that changes area, bounding box, aspect ratio, or removes too many points. If a contour fails those checks, Spool House Studio falls back to the less-smoothed contour instead of turning the artwork into a blob.
 
 Each job folder includes V4 comparison previews:
 
@@ -337,7 +355,8 @@ The GUI includes a simple Review panel after generation. Use the dropdown to com
 
 ## Troubleshooting
 
-- If `python` launches Inkscape's embedded Python, install regular Python 3.12 from python.org and enable "Add python.exe to PATH".
+- If `python` launches Inkscape's embedded Python, install regular Python 3.12 from python.org and enable "Add python.exe to PATH", or run commands with `.\.venv\Scripts\python.exe`.
+- Run `python scripts/check_environment.py` to see the active Python executable and whether `cv2`, `PySide6`, `shapely`, `mapbox_earcut`, and `config/config.yaml` load correctly.
 - If `python -m spool_house_ai.gui` says `Missing GUI dependency: PySide6`, activate your venv and run `python -m pip install -r requirements.txt`.
 - If PowerShell blocks venv activation, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 - Background removal is disabled by default for responsiveness. Turn on `background_removal_enabled` only after `rembg` and its model are installed locally.
@@ -347,4 +366,4 @@ The GUI includes a simple Review panel after generation. Use the dropdown to com
 - Transparent PNGs skip `rembg` and are processed directly.
 - If background removal is disabled or unavailable, opaque images are copied as cleaned PNGs and the rest of the pipeline still runs.
 - If STL generation fails, cleaned PNG, silhouette PNG, SVG, and debug previews are kept.
-- SVG output includes an editable `artwork` group plus `edit-guides` contour paths for easier inspection in Inkscape.
+- SVG output includes structured `foreground_mask`, `main_body`, `holes`, `preserved_details`, and `ignored_islands` groups. Each job also writes a visible `_review.svg` for easier inspection in Inkscape.
