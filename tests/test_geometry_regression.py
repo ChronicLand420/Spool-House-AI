@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -168,6 +169,34 @@ class GeometryRegressionTests(unittest.TestCase):
             )
             self.assertTrue(report.fallback_used)
             self.assertEqual(report.actual_backend, "raster_heightfield")
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.failures, [])
+
+    def test_auto_vector_first_falls_back_on_vector_attribute_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stl_path = Path(temp_dir) / "attribute_error_fallback.stl"
+            mask = np.zeros((32, 48), dtype=bool)
+            mask[6:26, 8:40] = True
+            auto_config = replace(self.stl_config, stl_backend="auto_vector_first")
+
+            with patch(
+                "spool_house_ai.processing.stl._create_vector_extrusion_stl",
+                side_effect=AttributeError("'MultiPolygon' object has no attribute 'exterior'"),
+            ):
+                stl_result = create_relief_stl(mask, stl_path, auto_config)
+
+            self.assertEqual(stl_result.requested_backend, "auto_vector_first")
+            self.assertEqual(stl_result.actual_backend, "raster_heightfield")
+            self.assertTrue(stl_result.fallback_used)
+            self.assertIn("MultiPolygon", stl_result.fallback_reason)
+
+            report = validate_stl_mesh(
+                stl_path,
+                requested_backend=stl_result.requested_backend,
+                actual_backend=stl_result.actual_backend,
+                fallback_reason=stl_result.fallback_reason,
+            )
+            self.assertTrue(report.exists)
             self.assertTrue(report.watertight)
             self.assertEqual(report.failures, [])
 

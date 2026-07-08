@@ -62,7 +62,7 @@ def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, c
                 fallback_used=False,
                 fallback_reason="",
             )
-        except (ImportError, RuntimeError, ValueError) as error:
+        except (ImportError, RuntimeError, ValueError, AttributeError) as error:
             _create_raster_heightfield_stl(analysis, output_path, config)
             return StlCreationResult(
                 requested_backend=config.stl_backend,
