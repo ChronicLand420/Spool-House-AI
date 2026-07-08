@@ -40,7 +40,9 @@ class PipelineJobStatusTests(unittest.TestCase):
 
             job_dir = output_dir / input_path.stem
             status_path = job_dir / "job_status.json"
+            summary_path = job_dir / "job_summary.md"
             self.assertTrue(status_path.exists())
+            self.assertTrue(summary_path.exists())
 
             status = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertEqual(status["input_file_path"], str(input_path.resolve()))
@@ -50,6 +52,7 @@ class PipelineJobStatusTests(unittest.TestCase):
             self.assertEqual(status["stl_path"], str(job_dir / f"{input_path.stem}.stl"))
             self.assertEqual(status["mesh_report_path"], str(job_dir / "mesh_report.json"))
             self.assertEqual(status["job_status_path"], str(status_path))
+            self.assertEqual(status["job_summary_path"], str(summary_path))
             self.assertIn("started_at", status)
             self.assertIn("finished_at", status)
             self.assertGreaterEqual(status["duration_seconds"], 0)
@@ -63,6 +66,10 @@ class PipelineJobStatusTests(unittest.TestCase):
             self.assertGreaterEqual(status["artifact_summary"]["removed_island_count"], 1)
             self.assertEqual(status["artifact_summary"]["cleanup_preset"], config.silhouette.cleanup_preset)
             self.assertFalse(status["failures"])
+            summary = summary_path.read_text(encoding="utf-8")
+            self.assertIn("Ready for slicer review", summary)
+            self.assertIn("Mesh", summary)
+            self.assertIn("Artwork Cleanup", summary)
 
 
 if __name__ == "__main__":

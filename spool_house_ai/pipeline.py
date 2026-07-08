@@ -45,6 +45,7 @@ class ImagePipeline:
         stl_path = output_dir / f"{image_path.stem}.stl"
         mesh_report_path = output_dir / "mesh_report.json"
         job_status_path = output_dir / "job_status.json"
+        job_summary_path = output_dir / "job_summary.md"
         preview_path = output_dir / f"{image_path.stem}_preview.png"
         body_mask_path = output_dir / f"{image_path.stem}_body_mask.png"
         detail_mask_path = output_dir / f"{image_path.stem}_detail_mask.png"
@@ -58,7 +59,9 @@ class ImagePipeline:
 
         def write_job_status() -> None:
             try:
-                _write_job_status(
+                finished_at = datetime.now(timezone.utc)
+                duration_seconds = perf_counter() - started_timer
+                status_payload = _write_job_status(
                     job_status_path,
                     config=self.config,
                     image_path=image_path,
@@ -68,21 +71,25 @@ class ImagePipeline:
                     stl_path=stl_path,
                     mesh_report_path=mesh_report_path,
                     job_status_path=job_status_path,
+                    job_summary_path=job_summary_path,
                     stl_result=stl_result,
                     mesh_report=mesh_report,
                     warnings=warnings,
                     failures=failures,
                     artifact_summary=_artifact_summary(analysis),
                     started_at=started_at,
-                    finished_at=datetime.now(timezone.utc),
-                    duration_seconds=perf_counter() - started_timer,
+                    finished_at=finished_at,
+                    duration_seconds=duration_seconds,
                 )
+                _write_job_summary(job_summary_path, status_payload)
                 self.logger.info("Created job status: %s", job_status_path)
+                self.logger.info("Created job summary: %s", job_summary_path)
             except Exception:
                 self.logger.exception("Failed to write job status for image: %s", image_path)
 
         self.logger.info("Processing image: %s", image_path.name)
         _emit(stage_callback, "Intake Room", "active", "Image queued for processing", image_path)
+        _emit(stage_callback, "Intake Room", "done", "Image accepted", image_path)
         if not self.config.pipeline.background_removal_enabled:
             self.logger.info("Background removal is disabled; using the original image as the cleaned PNG")
         elif not background_removal_available():
@@ -236,7 +243,7 @@ class ImagePipeline:
 
         _write_job_settings(settings_path, self.config)
         write_job_status()
-        _emit(stage_callback, "Output Vault", "done", "Output folder is ready", output_dir)
+        _emit(stage_callback, "Output Vault", "done", "Output folder is ready", preview_path)
 
         self.logger.info("Created cleaned PNG: %s", cleaned_png_path)
         self.logger.info("Created SVG: %s", svg_path)
@@ -319,6 +326,7 @@ def _write_job_status(
     stl_path: Path,
     mesh_report_path: Path,
     job_status_path: Path,
+    job_summary_path: Path,
     stl_result: StlCreationResult | None,
     mesh_report: MeshReport | None,
     warnings: list[str],
@@ -327,7 +335,7 @@ def _write_job_status(
     started_at: datetime,
     finished_at: datetime,
     duration_seconds: float,
-) -> None:
+) -> dict[str, Any]:
     payload = {
         "app_version": _load_app_version(config.project_root),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -341,6 +349,7 @@ def _write_job_status(
         "stl_path": str(stl_path),
         "mesh_report_path": str(mesh_report_path),
         "job_status_path": str(job_status_path),
+        "job_summary_path": str(job_summary_path),
         "requested_backend": stl_result.requested_backend if stl_result else config.stl.stl_backend,
         "actual_backend": stl_result.actual_backend if stl_result else "",
         "fallback_used": stl_result.fallback_used if stl_result else False,
@@ -367,6 +376,68 @@ def _write_job_status(
         "mesh_summary": _mesh_summary(mesh_report),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
+    mesh = status.get("mesh_summary") or {}
+    artifact = status.get("artifact_summary") or {}
+    warnings = status.get("warnings") or []
+    failures = status.get("failures") or []
+    if failures:
+        next_step = "Fix failures before slicer review."
+    elif warnings:
+        next_step = "Inspect the review SVG and mesh report before slicer review."
+    elif artifact.get("preserved_island_count"):
+        next_step = "Inspect preserved islands in the review SVG before export."
+    else:
+        next_step = "Ready for slicer review."
+
+    lines = [
+        f"# {Path(status.get('input_file_path', 'job')).name}",
+        "",
+        "## Job",
+        f"- Input: `{status.get('input_file_path', '')}`",
+        f"- Output folder: `{status.get('output_folder_path', '')}`",
+        f"- Cleanup preset: `{(status.get('settings_used') or {}).get('silhouette', {}).get('cleanup_preset', '')}`",
+        f"- Product mode: `{status.get('product_mode', '')}`",
+        f"- Detail mode: `{status.get('detail_mode', '')}`",
+        f"- Duration: `{status.get('duration_seconds', 0)}` seconds",
+        "",
+        "## Files",
+        f"- SVG: `{status.get('svg_path', '')}`",
+        f"- Review SVG: `{status.get('review_svg_path', '')}`",
+        f"- STL: `{status.get('stl_path', '')}`",
+        f"- Mesh report: `{status.get('mesh_report_path', '')}`",
+        f"- Job status: `{status.get('job_status_path', '')}`",
+        "",
+        "## Mesh",
+        f"- Requested backend: `{status.get('requested_backend', '')}`",
+        f"- Actual backend: `{status.get('actual_backend', '')}`",
+        f"- Fallback used: `{status.get('fallback_used', False)}`",
+        f"- Fallback reason: `{status.get('fallback_reason', '')}`",
+        f"- Watertight: `{mesh.get('watertight', '')}`",
+        f"- Face count: `{mesh.get('face_count', '')}`",
+        f"- Bounds mm: `{mesh.get('bounding_box_mm', '')}`",
+        "",
+        "## Artwork Cleanup",
+        f"- Isolated islands: `{artifact.get('isolated_island_count', 0)}`",
+        f"- Removed islands: `{artifact.get('removed_island_count', 0)}`",
+        f"- Preserved islands: `{artifact.get('preserved_island_count', 0)}`",
+        f"- Preserved details: `{artifact.get('preserved_detail_count', 0)}`",
+        "",
+        "## Review",
+        f"- Warnings: `{len(warnings)}`",
+        f"- Failures: `{len(failures)}`",
+        f"- Recommended next step: {next_step}",
+    ]
+    if warnings:
+        lines.extend(["", "### Warnings"])
+        lines.extend(f"- {warning}" for warning in warnings)
+    if failures:
+        lines.extend(["", "### Failures"])
+        lines.extend(f"- {failure}" for failure in failures)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _artifact_summary(analysis: Any | None) -> dict[str, Any]:

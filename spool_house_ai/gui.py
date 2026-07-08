@@ -104,8 +104,8 @@ class RoomCard(QFrame):
         super().__init__()
         self.title = title
         self.setObjectName("roomCard")
-        self.setMaximumHeight(150)
-        self.setMinimumWidth(165)
+        self.setMaximumHeight(168)
+        self.setMinimumWidth(178)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -121,8 +121,7 @@ class RoomCard(QFrame):
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
         self.thumb = QLabel()
-        self.thumb.setFixedSize(110, 74)
-        self.thumb.setFixedSize(98, 58)
+        self.thumb.setFixedSize(126, 78)
         self.thumb.setAlignment(Qt.AlignCenter)
         self.thumb.setText("preview")
         self.thumb.setObjectName("thumb")
@@ -216,6 +215,8 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         root = QVBoxLayout(central)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(3)
 
         title = QLabel(APP_DISPLAY_NAME)
         title.setObjectName("appTitle")
@@ -233,7 +234,7 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(self._bunker_panel())
         main_splitter.addWidget(self._settings_panel())
         main_splitter.setChildrenCollapsible(False)
-        main_splitter.setSizes([300, 650, 430])
+        main_splitter.setSizes([330, 700, 430])
 
         log_panel = QWidget()
         self.log_panel = log_panel
@@ -277,7 +278,7 @@ class MainWindow(QMainWindow):
 
         panel = QFrame()
         panel.setObjectName("sidePanel")
-        panel.setMinimumWidth(280)
+        panel.setMinimumWidth(310)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(9)
@@ -352,14 +353,14 @@ class MainWindow(QMainWindow):
         review_title = QLabel("Review")
         review_title.setObjectName("sectionTitle")
         layout.addWidget(review_title)
-        self.review_stage = self._combo(["original", "cleaned", "body", "holes", "details", "vector", "STL"])
+        self.review_stage = self._combo(["original", "cleaned", "body", "holes", "details", "vector", "review SVG", "STL"])
         self.review_stage.currentTextChanged.connect(self.refresh_review)
         self.review_warning = QLabel("")
         self.review_warning.setWordWrap(True)
         self.review_before = QLabel("before")
         self.review_after = QLabel("after")
         for label in [self.review_before, self.review_after]:
-            label.setFixedSize(118, 82)
+            label.setFixedSize(136, 92)
             label.setAlignment(Qt.AlignCenter)
             label.setObjectName("thumb")
         compare_row = QHBoxLayout()
@@ -373,6 +374,30 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.review_warning)
         layout.addLayout(compare_row)
         layout.addWidget(self.geometry_report_view)
+
+        production_title = QLabel("Production Review")
+        production_title.setObjectName("sectionTitle")
+        layout.addWidget(production_title)
+        self.production_thumbs: dict[str, QLabel] = {}
+        production_grid = QGridLayout()
+        production_grid.setHorizontalSpacing(8)
+        production_grid.setVerticalSpacing(8)
+        for index, name in enumerate(["Input", "SVG", "Review SVG", "Preview"]):
+            wrapper = QVBoxLayout()
+            label = QLabel(name)
+            label.setObjectName("mutedText")
+            thumb = QLabel(name)
+            thumb.setFixedSize(136, 92)
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setObjectName("thumb")
+            self.production_thumbs[name] = thumb
+            wrapper.addWidget(label)
+            wrapper.addWidget(thumb)
+            cell = QWidget()
+            cell.setLayout(wrapper)
+            production_grid.addWidget(cell, index // 2, index % 2)
+        layout.addLayout(production_grid)
+        layout.addStretch(1)
         scroll.setWidget(panel)
         return scroll
 
@@ -382,9 +407,10 @@ class MainWindow(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget()
         grid = QGridLayout(panel)
-        grid.setContentsMargins(14, 14, 14, 14)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(12)
+        grid.setContentsMargins(10, 8, 10, 10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        grid.setAlignment(Qt.AlignTop)
         columns = 3
         for index, room in enumerate(ROOMS):
             card = RoomCard(room)
@@ -392,6 +418,7 @@ class MainWindow(QMainWindow):
             grid.addWidget(card, index // columns, index % columns)
         for column in range(columns):
             grid.setColumnStretch(column, 1)
+        grid.setRowStretch(3, 1)
         scroll.setWidget(panel)
         return scroll
 
@@ -414,7 +441,7 @@ class MainWindow(QMainWindow):
             self.config.stl.detail_mode,
         )
         self.cleanup_preset = self._combo(
-            ["default", "logo_clean", "detail_preserving"],
+            ["default", "logo_clean", "clean_logo", "drip_logo", "splatter_logo", "detail_preserving"],
             self.config.silhouette.cleanup_preset,
         )
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
@@ -892,21 +919,41 @@ class MainWindow(QMainWindow):
             "holes": self.current_output_dir / f"{self.current_stem}_preview_hole_mask.png",
             "details": self.current_output_dir / f"{self.current_stem}_preview_detail_mask.png",
             "vector": self.current_output_dir / f"{self.current_stem}_preview_svg.png",
+            "review SVG": self.current_output_dir / f"{self.current_stem}_preview_svg.png",
             "STL": self.current_output_dir / f"{self.current_stem}_preview_stl.png",
         }
-        self._set_label_pixmap(self.review_before, original)
-        self._set_label_pixmap(self.review_after, stage_files.get(self.review_stage.currentText(), original))
+        self._set_label_pixmap(self.review_before, original, "before")
+        self._set_label_pixmap(self.review_after, stage_files.get(self.review_stage.currentText(), original), "after")
+        production_paths = {
+            "Input": original,
+            "SVG": self.current_output_dir / f"{self.current_stem}_preview_svg.png",
+            "Review SVG": self.current_output_dir / f"{self.current_stem}_review.svg",
+            "Preview": self.current_output_dir / f"{self.current_stem}_preview.png",
+        }
+        for name, label in self.production_thumbs.items():
+            display_path = production_paths.get(name, original)
+            fallback_preview = stage_files["vector"] if name == "Review SVG" else display_path
+            self._set_label_pixmap(label, fallback_preview, name)
+            if display_path:
+                label.setToolTip(str(display_path))
         report_path = self.current_output_dir / "geometry_report.txt"
         if report_path.exists():
             report = report_path.read_text(encoding="utf-8")
             self.geometry_report_view.setPlainText(report)
             self.review_warning.setText("Warning: smoothing fallback used" if "fallback used: true" in report else "")
+        else:
+            self.geometry_report_view.clear()
+            self.review_warning.setText("")
 
-    def _set_label_pixmap(self, label: QLabel, path: Path) -> None:
-        if path.exists():
+    def _set_label_pixmap(self, label: QLabel, path: Path | None, placeholder: str) -> None:
+        label.setToolTip(str(path) if path else "")
+        if path and path.exists():
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
                 label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                return
+        label.clear()
+        label.setText(placeholder)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(

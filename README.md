@@ -227,6 +227,7 @@ output/example/
   example_preview_stl.png
   mesh_report.json
   job_status.json
+  job_summary.md
   job_settings.yaml
 ```
 
@@ -297,7 +298,7 @@ The GUI exposes cleanup presets in the Cleanup / Vector settings:
 
 Use `logo_clean` or `clean_logo` when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use `drip_logo` for drip/graffiti marks where nearby drops are part of the design. Use `splatter_logo` for distressed or rough logos where edge texture matters. Avoid aggressive logo cleanup when detached dots are part of the design, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
 
-Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export.
+Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export. `job_summary.md` is a short human-readable package summary for slicer/product review.
 
 ## Geometry Quality / Smoothing Settings
 
