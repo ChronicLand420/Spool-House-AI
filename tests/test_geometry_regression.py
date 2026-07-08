@@ -281,6 +281,26 @@ class GeometryRegressionTests(unittest.TestCase):
         self.assertFalse(logo_config.preserve_islands_near_body)
         self.assertEqual(logo_config.island_near_body_distance_px, 0)
 
+    def test_phase_10_logo_presets_have_distinct_cleanup_profiles(self) -> None:
+        clean_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="clean_logo"))
+        drip_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="drip_logo"))
+        splatter_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="splatter_logo"))
+
+        self.assertEqual(clean_logo.cleanup_preset, "clean_logo")
+        self.assertGreaterEqual(clean_logo.min_island_area_px, 150)
+        self.assertFalse(clean_logo.preserve_islands_near_body)
+
+        self.assertEqual(drip_logo.cleanup_preset, "drip_logo")
+        self.assertTrue(drip_logo.preserve_islands_near_body)
+        self.assertGreaterEqual(drip_logo.island_near_body_distance_px, 14)
+        self.assertGreaterEqual(drip_logo.min_island_area_px, 110)
+
+        self.assertEqual(splatter_logo.cleanup_preset, "splatter_logo")
+        self.assertTrue(splatter_logo.preserve_islands_near_body)
+        self.assertGreaterEqual(splatter_logo.island_near_body_distance_px, 18)
+        self.assertLessEqual(splatter_logo.min_contour_area, 18)
+        self.assertLessEqual(splatter_logo.simplify_tolerance, 0.65)
+
     @staticmethod
     def _create_regression_artwork(path: Path) -> None:
         image = Image.new("RGBA", (420, 280), (255, 255, 255, 0))

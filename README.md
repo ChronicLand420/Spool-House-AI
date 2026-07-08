@@ -290,9 +290,12 @@ The GUI exposes cleanup presets in the Cleanup / Vector settings:
 
 - `default`: keeps the existing balanced behavior and preserves nearby small islands when they may be intentional details.
 - `logo_clean`: removes tiny isolated dot artifacts more aggressively for simple logos, wall art, and Nike/Mopar-style artwork.
+- `clean_logo`: a plain-language logo cleanup preset for clean marks, text logos, and bold wall art.
+- `drip_logo`: removes far-away specks while preserving nearby drips, drops, and small detached logo pieces.
+- `splatter_logo`: preserves rough/splatter edges and near-body texture while still removing tiny isolated junk.
 - `detail_preserving`: keeps more small detached or near-body detail than `logo_clean` for artwork where tiny pieces may matter.
 
-Use `logo_clean` when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Avoid it when those detached dots are part of the design, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
+Use `logo_clean` or `clean_logo` when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use `drip_logo` for drip/graffiti marks where nearby drops are part of the design. Use `splatter_logo` for distressed or rough logos where edge texture matters. Avoid aggressive logo cleanup when detached dots are part of the design, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
 
 Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export.
 

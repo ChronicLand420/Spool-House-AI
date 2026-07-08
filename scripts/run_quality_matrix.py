@@ -29,7 +29,7 @@ from spool_house_ai.test_mode import (
 
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-PRESETS = ("default", "logo_clean", "detail_preserving")
+PRESETS = ("default", "logo_clean", "clean_logo", "drip_logo", "splatter_logo", "detail_preserving")
 DEFAULT_REVIEW_DIR = Path(tempfile.gettempdir()) / "shai_quality_matrix"
 
 

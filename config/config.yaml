@@ -17,6 +17,7 @@ silhouette:
   upscale_factor: 2
   pre_blur_radius: 1
   adaptive_threshold: false
+  # Options: default, logo_clean, clean_logo, drip_logo, splatter_logo, detail_preserving
   cleanup_preset: default
   threshold: 20
   threshold_value: 128
