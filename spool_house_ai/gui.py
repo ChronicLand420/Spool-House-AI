@@ -59,6 +59,15 @@ ROOMS = [
 
 APP_DISPLAY_NAME = "Spool House Studio"
 
+PRESET_DESCRIPTIONS = {
+    "default": "Balanced cleanup for mixed artwork. Keeps likely intentional nearby detail.",
+    "logo_clean": "Best for simple logos and wall art with unwanted floating specks.",
+    "clean_logo": "Clean, bold marks and text logos with fewer detached artifacts.",
+    "drip_logo": "Preserves nearby drips and drops while removing far-away specks.",
+    "splatter_logo": "Keeps rough logo texture and near-body splatter detail.",
+    "detail_preserving": "Keeps more small detached detail for artwork where tiny pieces matter.",
+}
+
 
 def _elide_text(widget: QWidget, text: str, reserve_px: int = 24) -> str:
     width = max(80, widget.width() - reserve_px)
@@ -158,6 +167,35 @@ class RoomCard(QFrame):
                 self.thumb.setPixmap(pixmap.scaled(self.thumb.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
 
+class CollapsibleSection(QFrame):
+    def __init__(self, title: str, expanded: bool = False) -> None:
+        super().__init__()
+        self.setObjectName("collapsibleSection")
+        self.toggle_button = QPushButton()
+        self.toggle_button.setObjectName("sectionToggle")
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.clicked.connect(lambda checked: self.set_expanded(checked))
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(0, 8, 0, 0)
+        self.body_layout.setSpacing(10)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(self.body)
+
+        self.title = title
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.toggle_button.setChecked(expanded)
+        self.body.setVisible(expanded)
+        prefix = "Hide" if expanded else "Show"
+        self.toggle_button.setText(f"{prefix} {self.title}")
+
+
 class PipelineWorker(QThread):
     stage_changed = Signal(str, str, str, str)
     log_line = Signal(str)
@@ -216,20 +254,40 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
         root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(3)
+        root.setSpacing(8)
 
+        header = QFrame()
+        header.setObjectName("appHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(12)
+        brand_layout = QVBoxLayout()
+        brand_layout.setContentsMargins(0, 0, 0, 0)
+        brand_layout.setSpacing(3)
         title = QLabel(APP_DISPLAY_NAME)
         title.setObjectName("appTitle")
-        root.addWidget(title)
+        brand_layout.addWidget(title)
         if self.version:
             subtitle = QLabel(self.version)
             subtitle.setObjectName("appSubtitle")
-            root.addWidget(subtitle)
+            brand_layout.addWidget(subtitle)
         creator_credit = QLabel("Built by ChronicLand420")
         creator_credit.setObjectName("creatorCredit")
-        root.addWidget(creator_credit)
+        brand_layout.addWidget(creator_credit)
+        tagline = QLabel("Turn artwork into reviewable SVG, STL, and product-ready output packages.")
+        tagline.setObjectName("workflowTagline")
+        tagline.setWordWrap(True)
+        brand_layout.addWidget(tagline)
+        self.header_status_badge = QLabel("Ready")
+        self.header_status_badge.setObjectName("headerStatusBadge")
+        self.header_status_badge.setProperty("state", "ready")
+        self.header_status_badge.setAlignment(Qt.AlignCenter)
+        header_layout.addLayout(brand_layout, 1)
+        header_layout.addWidget(self.header_status_badge, 0, Qt.AlignTop)
+        root.addWidget(header)
 
         main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter = main_splitter
         main_splitter.addWidget(self._left_panel())
         main_splitter.addWidget(self._bunker_panel())
         main_splitter.addWidget(self._settings_panel())
@@ -272,6 +330,7 @@ class MainWindow(QMainWindow):
 
     def _left_panel(self) -> QWidget:
         scroll = QScrollArea()
+        self.left_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setObjectName("leftScroll")
@@ -288,11 +347,13 @@ class MainWindow(QMainWindow):
         self.queue = DropQueue()
         self.queue.files_added.connect(self.add_files)
         self.queue.setMinimumHeight(110)
-        self.generate_button = QPushButton("Generate Product")
+        self.generate_button = QPushButton("Generate")
         self.generate_button.setObjectName("primaryButton")
+        self.generate_button.setToolTip("Generate the selected image, or the first queued image if none is selected.")
         self.generate_button.clicked.connect(self.generate)
         self.generate_all_button = QPushButton("Generate All")
         self.generate_all_button.setObjectName("secondaryButton")
+        self.generate_all_button.setToolTip("Process every queued image one at a time.")
         self.generate_all_button.clicked.connect(self.generate_all)
         self.open_output_button = QPushButton("Open Output Folder")
         self.open_stl_button = QPushButton("Open STL")
@@ -322,10 +383,10 @@ class MainWindow(QMainWindow):
         self.copy_stl_button.clicked.connect(lambda: self.copy_named_output(".stl"))
         self.copy_mesh_report_button.clicked.connect(lambda: self.copy_output_path("mesh_report.json"))
         self.copy_job_status_button.clicked.connect(lambda: self.copy_output_path("job_status.json"))
-        queue_title = QLabel("Image Queue")
+        queue_title = QLabel("1. Add Artwork")
         queue_title.setObjectName("sectionTitle")
         layout.addWidget(queue_title)
-        queue_note = QLabel("Generate processes the selected item, or the first item if nothing is selected.")
+        queue_note = QLabel("Drop PNG/JPG artwork here, then generate one image or the full queue.")
         queue_note.setObjectName("mutedText")
         queue_note.setWordWrap(True)
         layout.addWidget(queue_note)
@@ -335,7 +396,7 @@ class MainWindow(QMainWindow):
         generate_row.addWidget(self.generate_button)
         generate_row.addWidget(self.generate_all_button)
         layout.addLayout(generate_row)
-        output_title = QLabel("Outputs")
+        output_title = QLabel("Output Vault")
         output_title.setObjectName("sectionTitle")
         layout.addWidget(output_title)
         output_grid = QGridLayout()
@@ -350,7 +411,7 @@ class MainWindow(QMainWindow):
         output_grid.addWidget(self.copy_mesh_report_button, 4, 0, 1, 2)
         output_grid.addWidget(self.copy_job_status_button, 5, 0, 1, 2)
         layout.addLayout(output_grid)
-        review_title = QLabel("Review")
+        review_title = QLabel("Stage Compare")
         review_title.setObjectName("sectionTitle")
         layout.addWidget(review_title)
         self.review_stage = self._combo(["original", "cleaned", "body", "holes", "details", "vector", "review SVG", "STL"])
@@ -403,11 +464,30 @@ class MainWindow(QMainWindow):
 
     def _bunker_panel(self) -> QWidget:
         scroll = QScrollArea()
+        self.pipeline_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget()
-        grid = QGridLayout(panel)
-        grid.setContentsMargins(10, 8, 10, 10)
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(10, 8, 10, 10)
+        outer.setSpacing(10)
+        workflow_header = QFrame()
+        workflow_header.setObjectName("workflowCard")
+        workflow_layout = QVBoxLayout(workflow_header)
+        workflow_layout.setContentsMargins(12, 10, 12, 10)
+        workflow_layout.setSpacing(3)
+        workflow_title = QLabel("Production Pipeline")
+        workflow_title.setObjectName("sectionTitle")
+        workflow_hint = QLabel("Clean artwork, trace vectors, forge the mesh, and package outputs for review.")
+        workflow_hint.setObjectName("mutedText")
+        workflow_hint.setWordWrap(True)
+        workflow_layout.addWidget(workflow_title)
+        workflow_layout.addWidget(workflow_hint)
+        outer.addWidget(workflow_header)
+
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(10)
         grid.setAlignment(Qt.AlignTop)
@@ -419,11 +499,13 @@ class MainWindow(QMainWindow):
         for column in range(columns):
             grid.setColumnStretch(column, 1)
         grid.setRowStretch(3, 1)
+        outer.addWidget(grid_widget, 1)
         scroll.setWidget(panel)
         return scroll
 
     def _settings_panel(self) -> QWidget:
         scroll = QScrollArea()
+        self.settings_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setObjectName("settingsScroll")
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -435,15 +517,32 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
         self.stl_backend = self._backend_combo()
-        self.product_mode = self._combo(["flat_relief", "keychain", "wall_art"], self.config.stl.product_mode)
+        self.product_mode = self._combo(
+            [("Flat Relief", "flat_relief"), ("Keychain", "keychain"), ("Wall Art", "wall_art")],
+            self.config.stl.product_mode,
+        )
         self.detail_mode = self._combo(
-            ["silhouette_only", "preserve_holes", "raised_details", "engraved_details", "layered_color_relief"],
+            [
+                ("Silhouette Only", "silhouette_only"),
+                ("Preserve Holes", "preserve_holes"),
+                ("Raised Details", "raised_details"),
+                ("Engraved Details", "engraved_details"),
+                ("Layered Color Relief", "layered_color_relief"),
+            ],
             self.config.stl.detail_mode,
         )
         self.cleanup_preset = self._combo(
-            ["default", "logo_clean", "clean_logo", "drip_logo", "splatter_logo", "detail_preserving"],
+            [
+                ("Default", "default"),
+                ("Logo Clean", "logo_clean"),
+                ("Clean Logo", "clean_logo"),
+                ("Drip Logo", "drip_logo"),
+                ("Splatter Logo", "splatter_logo"),
+                ("Detail Preserving", "detail_preserving"),
+            ],
             self.config.silhouette.cleanup_preset,
         )
+        self.cleanup_preset.currentIndexChanged.connect(self._update_preset_help)
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
         self.base_height = self._double_spin(0.2, 10.0, self.config.stl.base_height_mm)
         self.threshold = self._spin(0, 255, self.config.silhouette.threshold_value)
@@ -469,13 +568,30 @@ class MainWindow(QMainWindow):
         self.keychain_diameter = self._double_spin(1.0, 20.0, self.config.stl.keychain_hole_diameter_mm)
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
 
-        layout.addWidget(self._form_group("STL Backend", [("Backend", self.stl_backend)]))
-        layout.addWidget(self._form_group("Product", [("Product mode", self.product_mode), ("Detail mode", self.detail_mode)]))
+        preset_group = self._form_group("Presets", [("Artwork style", self.cleanup_preset)])
+        self.preset_help = QLabel("")
+        self.preset_help.setObjectName("presetDescription")
+        self.preset_help.setWordWrap(True)
+        preset_group.layout().addRow(self.preset_help)
+        layout.addWidget(preset_group)
         layout.addWidget(
+            self._form_group(
+                "Product Setup",
+                [
+                    ("Product", self.product_mode),
+                    ("Detail handling", self.detail_mode),
+                    ("Output size mm", self.output_scale),
+                ],
+            )
+        )
+
+        advanced_section = CollapsibleSection("Advanced Settings", expanded=False)
+        self.advanced_section = advanced_section
+        advanced_section.body_layout.addWidget(self._form_group("STL Engine", [("Backend", self.stl_backend)]))
+        advanced_section.body_layout.addWidget(
             self._form_group(
                 "Dimensions",
                 [
-                    ("Output scale mm", self.output_scale),
                     ("Base height mm", self.base_height),
                     ("Extrusion height mm", self.extrusion_height),
                     ("Detail height mm", self.detail_height),
@@ -486,7 +602,6 @@ class MainWindow(QMainWindow):
         cleanup_group = self._form_group(
             "Cleanup / Vector",
             [
-                ("Cleanup preset", self.cleanup_preset),
                 ("Threshold", self.threshold),
                 ("Smoothing", self.smoothing),
                 ("Min contour area", self.min_area),
@@ -501,23 +616,44 @@ class MainWindow(QMainWindow):
         cleanup_layout.addRow(self.preserve_holes)
         cleanup_layout.addRow(self.preserve_details)
         cleanup_layout.addRow(self.background_removal)
-        layout.addWidget(cleanup_group)
+        advanced_section.body_layout.addWidget(cleanup_group)
 
         keychain_group = self._form_group("Keychain", [("Hole diameter mm", self.keychain_diameter)])
         keychain_group.layout().addRow(self.keychain_hole)
-        layout.addWidget(keychain_group)
+        advanced_section.body_layout.addWidget(keychain_group)
+        layout.addWidget(advanced_section)
         layout.addStretch(1)
+        self._update_preset_help()
         scroll.setWidget(panel)
         return scroll
 
-    def _combo(self, values: list[str], current_value: str | None = None) -> QComboBox:
+    def _combo(self, values: list, current_value: str | None = None) -> QComboBox:
         combo = QComboBox()
-        combo.addItems(values)
+        for value in values:
+            if isinstance(value, tuple):
+                label, data = value
+            else:
+                label = data = value
+            combo.addItem(str(label), str(data))
         if current_value is not None:
-            index = combo.findText(current_value)
+            index = combo.findData(current_value)
+            if index < 0:
+                index = combo.findText(current_value)
             if index >= 0:
                 combo.setCurrentIndex(index)
         return combo
+
+    def _combo_value(self, combo: QComboBox) -> str:
+        data = combo.currentData()
+        return str(data if data is not None else combo.currentText())
+
+    def _update_preset_help(self) -> None:
+        if not hasattr(self, "preset_help"):
+            return
+        preset = self._combo_value(self.cleanup_preset)
+        description = PRESET_DESCRIPTIONS.get(preset, "Choose how aggressively artwork cleanup should remove small artifacts.")
+        self.preset_help.setText(description)
+        self.cleanup_preset.setToolTip(description)
 
     def _form_group(self, title: str, rows: list[tuple[str, QWidget]]) -> QGroupBox:
         group = QGroupBox(title)
@@ -536,9 +672,10 @@ class MainWindow(QMainWindow):
 
     def _backend_combo(self) -> QComboBox:
         combo = QComboBox()
-        combo.addItem("auto_vector_first - Try vector, fallback to raster", "auto_vector_first")
-        combo.addItem("vector_extrusion - Vector experimental", "vector_extrusion")
-        combo.addItem("raster_heightfield - Stable raster fallback", "raster_heightfield")
+        combo.addItem("Auto Vector First (recommended)", "auto_vector_first")
+        combo.addItem("Vector Extrusion (experimental)", "vector_extrusion")
+        combo.addItem("Raster Heightfield (fallback)", "raster_heightfield")
+        combo.setToolTip("Advanced mesh engine choice. Auto Vector First tries clean vector output, then falls back to raster if needed.")
         index = combo.findData(self.config.stl.stl_backend)
         combo.setCurrentIndex(max(0, index))
         return combo
@@ -642,8 +779,8 @@ class MainWindow(QMainWindow):
         self.generate_all_button.setEnabled(enabled)
 
     def _config_from_controls(self) -> AppConfig:
-        product_mode = self.product_mode.currentText()
-        detail_mode = self.detail_mode.currentText()
+        product_mode = self._combo_value(self.product_mode)
+        detail_mode = self._combo_value(self.detail_mode)
         pipeline = replace(
             self.config.pipeline,
             product_mode=product_mode,
@@ -652,7 +789,7 @@ class MainWindow(QMainWindow):
         )
         silhouette = replace(
             self.config.silhouette,
-            cleanup_preset=self.cleanup_preset.currentText(),
+            cleanup_preset=self._combo_value(self.cleanup_preset),
             threshold_value=self.threshold.value(),
             smoothing_strength=self.smoothing.value(),
             min_contour_area=self.min_area.value(),
@@ -834,6 +971,37 @@ class MainWindow(QMainWindow):
     def _set_status_summary(self, text: str, tooltip: str | None = None) -> None:
         self.log_summary.setText(_elide_text(self.log_summary, text, reserve_px=20))
         self.log_summary.setToolTip(tooltip or text)
+        self._set_header_status(text)
+
+    def _set_header_status(self, text: str) -> None:
+        if not hasattr(self, "header_status_badge"):
+            return
+        normalized = text.lower()
+        has_failures = "failed" in normalized or ("failures" in normalized and "0 failures" not in normalized)
+        has_warnings = (
+            ("warning" in normalized or "warnings" in normalized)
+            and "0 warning" not in normalized
+            and "warnings 0" not in normalized
+        )
+        if normalized.startswith("running"):
+            label = "Running"
+            state = "running"
+        elif has_failures:
+            label = "Needs Review"
+            state = "warning"
+        elif has_warnings:
+            label = "Needs Review"
+            state = "warning"
+        elif normalized.startswith("done"):
+            label = "Done"
+            state = "done"
+        else:
+            label = "Ready"
+            state = "ready"
+        self.header_status_badge.setText(label)
+        self.header_status_badge.setProperty("state", state)
+        self.header_status_badge.style().unpolish(self.header_status_badge)
+        self.header_status_badge.style().polish(self.header_status_badge)
 
     def _selected_stl_backend(self) -> str:
         data = self.stl_backend.currentData()
@@ -955,31 +1123,43 @@ class MainWindow(QMainWindow):
         label.clear()
         label.setText(placeholder)
 
+
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
-            QWidget { background: #111318; color: #e8eaed; font-family: Segoe UI; font-size: 10.5pt; }
-            #appTitle { font-size: 28px; font-weight: 700; color: #A855F7; padding: 4px 8px 0 8px; }
-            #appSubtitle { color: #8e98a8; padding: 0 8px 6px 8px; }
-            #creatorCredit { color: #9aa4b2; font-size: 9pt; padding: 0 8px 8px 8px; }
-            #sectionTitle { color: #f2f4f7; font-size: 12pt; font-weight: 700; margin-top: 6px; }
+            QWidget { background: #101217; color: #e8eaed; font-family: Segoe UI; font-size: 10.5pt; }
+            QLabel { background: transparent; }
+            #appHeader { background: #171a22; border: 1px solid #2a303a; border-radius: 10px; }
+            #appTitle { font-size: 27px; font-weight: 800; color: #A855F7; padding: 0; }
+            #appSubtitle { color: #9aa4b2; padding: 0; }
+            #creatorCredit { color: #b7c0cf; font-size: 9pt; padding: 0; }
+            #workflowTagline { color: #8e98a8; font-size: 9.5pt; padding-top: 3px; }
+            #headerStatusBadge { background: #20242e; border: 1px solid #3a4352; border-radius: 12px; color: #dce1e8; font-weight: 800; padding: 6px 12px; min-width: 92px; }
+            #headerStatusBadge[state="running"] { background: #2a1f3a; border-color: #A855F7; color: #f4eaff; }
+            #headerStatusBadge[state="done"] { background: #183326; border-color: #55b47a; color: #c9f7d9; }
+            #headerStatusBadge[state="warning"] { background: #30243b; border-color: #C084FC; color: #f4eaff; }
+            #sectionTitle { color: #f2f4f7; font-size: 12pt; font-weight: 800; margin-top: 4px; }
             #mutedText { color: #9aa4b2; font-size: 9pt; }
+            #presetDescription { color: #aeb7c5; font-size: 9pt; line-height: 130%; padding: 2px 0 0 0; }
             #statusSummary { color: #c7d0dd; font-size: 9.5pt; padding: 8px 10px 0 10px; }
-            #sidePanel { background: #181b22; border: 1px solid #2a303a; border-radius: 8px; }
-            QScrollArea { border: 0; background: #111318; }
+            #sidePanel, #workflowCard { background: #171a22; border: 1px solid #2a303a; border-radius: 10px; }
+            #collapsibleSection { background: transparent; border: 0; }
+            QScrollArea { border: 0; background: #101217; }
             QSplitter::handle { background: #1c212b; width: 5px; height: 5px; }
             QPushButton { background: #2b313d; color: #f2f4f7; border: 1px solid #3a4352; padding: 8px 10px; border-radius: 5px; font-weight: 600; }
             QPushButton:hover { background: #343c49; }
             QPushButton#primaryButton { background: #A855F7; color: #111318; border: 1px solid #7E22CE; font-weight: 800; }
             QPushButton#primaryButton:hover { background: #C084FC; }
+            QPushButton#sectionToggle { text-align: left; background: #181d27; border: 1px solid #303744; color: #f2f4f7; font-weight: 800; padding: 10px 12px; border-radius: 8px; }
+            QPushButton#sectionToggle:hover { border-color: #A855F7; background: #202331; }
             QPushButton:disabled { background: #20242c; color: #687386; border: 1px solid #2a303a; }
             QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #0d0f14; border: 1px solid #303744; color: #eef1f5; border-radius: 5px; padding: 5px; }
             QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; }
-            QGroupBox#settingsGroup { background: #151922; border: 1px solid #2a303a; border-radius: 8px; margin-top: 12px; padding-top: 10px; font-weight: 700; color: #A855F7; }
+            QGroupBox#settingsGroup { background: #151922; border: 1px solid #2a303a; border-radius: 9px; margin-top: 12px; padding-top: 10px; font-weight: 800; color: #A855F7; }
             QGroupBox#settingsGroup::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
             #formLabel { color: #aeb7c5; font-weight: 500; }
             QCheckBox { color: #dce1e8; spacing: 8px; }
-            #roomCard { background: #181c24; border: 1px solid #303744; border-radius: 8px; }
+            #roomCard { background: #181c24; border: 1px solid #303744; border-radius: 9px; }
             #roomCard[state="active"] { border-color: #A855F7; background: #202331; }
             #roomCard[state="done"] { border-color: #55b47a; }
             #roomCard[state="warning"] { border-color: #A855F7; }

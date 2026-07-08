@@ -40,10 +40,12 @@ The app supports:
 
 - Drag/drop PNG or JPG files into the queue.
 - Click `Add Image` to browse for files.
-- Choose product and detail settings.
-- Click `Generate Product` for the selected/first queued file, or `Generate All` to process the queue one image at a time.
+- Choose an `Artwork style` preset and `Product Setup` options.
+- Open `Advanced Settings` only when you need backend, dimension, cleanup, vector, or keychain controls.
+- Click `Generate` for the selected/first queued file, or `Generate All` to process the queue one image at a time.
 - Watch rooms light up as stages run: Intake Room, Cleanup Lab, Detail Analyzer, Vector Workshop, Mesh Forge, Render Bay, and Output Vault.
 - See elapsed time, rough ETA, and batch item count in the status strip while jobs run.
+- Use `Output Vault` and `Production Review` to inspect generated files and preview thumbnails.
 - Open the output folder, STL, SVG, or preview after generation.
 
 The visual theme is an original underground maker bunker/factory interface. It does not use Fallout Shelter assets, names, characters, or copied art.
