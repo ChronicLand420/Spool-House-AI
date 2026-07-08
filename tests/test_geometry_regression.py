@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 from spool_house_ai.config import apply_cleanup_preset, load_config
 from spool_house_ai.processing.analysis import analyze_image
 from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh
+from spool_house_ai.test_mode import create_real_world_geometry_test_image
 
 
 class GeometryRegressionTests(unittest.TestCase):
@@ -198,6 +199,48 @@ class GeometryRegressionTests(unittest.TestCase):
             )
             self.assertTrue(report.exists)
             self.assertTrue(report.watertight)
+            self.assertEqual(report.failures, [])
+
+    def test_vector_backend_handles_multipolygon_contours_without_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config = load_config(Path("config/config.yaml"))
+            sample_config = replace(config, input_dir=temp_path, output_dir=temp_path / "output")
+            image_path = create_real_world_geometry_test_image(sample_config)
+            output_mask = temp_path / "multipolygon_silhouette.png"
+            stl_path = temp_path / "multipolygon_vector.stl"
+
+            silhouette_config = apply_cleanup_preset(
+                replace(
+                    config.silhouette,
+                    cleanup_preset="detail_preserving",
+                    detail_mode="preserve_holes",
+                )
+            )
+            analysis = analyze_image(image_path, output_mask, silhouette_config)
+            stl_config = replace(
+                config.stl,
+                stl_backend="auto_vector_first",
+                detail_mode="preserve_holes",
+            )
+
+            stl_result = create_relief_stl(analysis, stl_path, stl_config)
+            self.assertEqual(stl_result.requested_backend, "auto_vector_first")
+            self.assertEqual(stl_result.actual_backend, "vector_extrusion")
+            self.assertFalse(stl_result.fallback_used)
+            self.assertEqual(stl_result.fallback_reason, "")
+
+            report = validate_stl_mesh(
+                stl_path,
+                requested_backend=stl_result.requested_backend,
+                actual_backend=stl_result.actual_backend,
+                fallback_reason=stl_result.fallback_reason,
+            )
+            self.assertTrue(report.exists)
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertEqual(report.failures, [])
 
     def test_colored_logo_foreground_survives_thresholding(self) -> None:

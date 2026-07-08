@@ -169,8 +169,8 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
         }.get(config.product_mode, 1.0)
     )
 
-    exterior_polygons: list[Polygon] = []
-    hole_polygons: list[Polygon] = []
+    exterior_polygons = []
+    hole_polygons = []
     for contour in analysis.vector_contours:
         ring = _contour_to_mm_ring(contour.points, scale, depth_mm)
         if len(ring) < 3:
@@ -178,12 +178,11 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
         polygon = Polygon(ring)
         if not polygon.is_valid:
             polygon = polygon.buffer(0)
-        if polygon.is_empty or polygon.area <= 0:
-            continue
+        polygon_parts = _valid_polygon_parts(polygon)
         if contour.is_hole:
-            hole_polygons.append(polygon)
+            hole_polygons.extend(polygon_parts)
         else:
-            exterior_polygons.append(polygon)
+            exterior_polygons.extend(polygon_parts)
 
     polygons = []
     for exterior in exterior_polygons:
@@ -195,24 +194,35 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
         polygon = Polygon(list(exterior.exterior.coords), holes)
         if not polygon.is_valid:
             polygon = polygon.buffer(0)
-        if not polygon.is_empty and polygon.area > 0:
-            polygons.append(polygon)
+        polygons.extend(_valid_polygon_parts(polygon))
 
     if not polygons:
         raise ValueError("Vector extrusion did not find valid polygons.")
 
     merged = unary_union(polygons)
-    merged_polygons = list(merged.geoms) if hasattr(merged, "geoms") else [merged]
+    merged_polygons = _valid_polygon_parts(merged)
     meshes = [
         trimesh.creation.extrude_polygon(polygon, height=extrusion_height)
         for polygon in merged_polygons
-        if not polygon.is_empty and polygon.area > 0
     ]
     if not meshes:
         raise ValueError("Vector extrusion did not create any meshes.")
 
     mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
     mesh.export(output_path)
+
+
+def _valid_polygon_parts(geometry):
+    if geometry.is_empty:
+        return []
+    if geometry.geom_type == "Polygon":
+        return [geometry] if geometry.area > 0 else []
+    if geometry.geom_type in {"MultiPolygon", "GeometryCollection"}:
+        polygons = []
+        for part in geometry.geoms:
+            polygons.extend(_valid_polygon_parts(part))
+        return polygons
+    return []
 
 
 def validate_stl_mesh(
