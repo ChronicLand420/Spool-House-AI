@@ -14,6 +14,7 @@ try:
         QApplication,
         QCheckBox,
         QComboBox,
+        QDialog,
         QFileDialog,
         QFormLayout,
         QFrame,
@@ -45,6 +46,13 @@ except ModuleNotFoundError as error:
 from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config
 from spool_house_ai.logging_setup import configure_logging
 from spool_house_ai.pipeline import ImagePipeline
+from spool_house_ai.ui_preferences import (
+    UiPreferences,
+    default_ui_preferences,
+    load_ui_preferences,
+    save_ui_preferences,
+    ui_preferences_path,
+)
 
 
 ROOMS = [
@@ -66,6 +74,28 @@ PRESET_DESCRIPTIONS = {
     "drip_logo": "Preserves nearby drips and drops while removing far-away specks.",
     "splatter_logo": "Keeps rough logo texture and near-body splatter detail.",
     "detail_preserving": "Keeps more small detached detail for artwork where tiny pieces matter.",
+}
+
+ACCENT_STYLES = {
+    "purple": ("#A855F7", "#7E22CE", "#C084FC"),
+    "green": ("#22C55E", "#15803D", "#86EFAC"),
+    "orange": ("#F97316", "#C2410C", "#FDBA74"),
+    "blue": ("#3B82F6", "#1D4ED8", "#93C5FD"),
+    "red": ("#EF4444", "#B91C1C", "#FCA5A5"),
+    "pink": ("#EC4899", "#BE185D", "#F9A8D4"),
+    "gray": ("#9CA3AF", "#4B5563", "#D1D5DB"),
+}
+
+ACCENT_TEXT_COLORS = {
+    "blue": "#f8fafc",
+    "red": "#f8fafc",
+    "gray": "#111318",
+}
+
+PREVIEW_SIZES = {
+    "small": {"room": (108, 68), "review": (118, 80), "room_height": 150, "spacing": 6, "padding": 9},
+    "medium": {"room": (126, 78), "review": (136, 92), "room_height": 168, "spacing": 7, "padding": 10},
+    "large": {"room": (148, 92), "review": (158, 106), "room_height": 188, "spacing": 8, "padding": 11},
 }
 
 
@@ -116,9 +146,9 @@ class RoomCard(QFrame):
         self.setMaximumHeight(168)
         self.setMinimumWidth(178)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(7)
+        self.layout_ref = QVBoxLayout(self)
+        self.layout_ref.setContentsMargins(10, 10, 10, 10)
+        self.layout_ref.setSpacing(7)
         self.header = QLabel(title)
         self.header.setObjectName("roomTitle")
         self.status = QLabel("Idle")
@@ -134,10 +164,10 @@ class RoomCard(QFrame):
         self.thumb.setAlignment(Qt.AlignCenter)
         self.thumb.setText("preview")
         self.thumb.setObjectName("thumb")
-        layout.addWidget(self.header)
-        layout.addWidget(self.thumb)
-        layout.addWidget(self.progress)
-        layout.addWidget(self.status)
+        self.layout_ref.addWidget(self.header)
+        self.layout_ref.addWidget(self.thumb)
+        self.layout_ref.addWidget(self.progress)
+        self.layout_ref.addWidget(self.status)
         self.set_state("idle", "Idle", None)
 
     def set_state(self, state: str, message: str, thumbnail: Path | None) -> None:
@@ -165,6 +195,12 @@ class RoomCard(QFrame):
             pixmap = QPixmap(str(thumbnail))
             if not pixmap.isNull():
                 self.thumb.setPixmap(pixmap.scaled(self.thumb.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def set_visual_size(self, thumb_width: int, thumb_height: int, max_height: int, padding: int, spacing: int) -> None:
+        self.setMaximumHeight(max_height)
+        self.layout_ref.setContentsMargins(padding, padding, padding, padding)
+        self.layout_ref.setSpacing(spacing)
+        self.thumb.setFixedSize(thumb_width, thumb_height)
 
 
 class CollapsibleSection(QFrame):
@@ -194,6 +230,144 @@ class CollapsibleSection(QFrame):
         self.body.setVisible(expanded)
         prefix = "Hide" if expanded else "Show"
         self.toggle_button.setText(f"{prefix} {self.title}")
+
+
+class SettingsDialog(QDialog):
+    preferences_changed = Signal(object)
+
+    def __init__(self, preferences: UiPreferences, version: str, output_dir: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._syncing = False
+        self.last_cleanup_preset = preferences.last_cleanup_preset
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("Settings")
+        title.setObjectName("dialogTitle")
+        intro = QLabel("Customize the app shell without changing production pipeline settings.")
+        intro.setObjectName("mutedText")
+        intro.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(intro)
+
+        self.theme_combo = self._combo([("Dark", "dark"), ("Light", "light")])
+        self.accent_combo = self._combo(
+            [
+                ("Spool Purple", "purple"),
+                ("Neon Green", "green"),
+                ("Fire Orange", "orange"),
+                ("Blue", "blue"),
+                ("Red", "red"),
+                ("Pink", "pink"),
+                ("Neutral Gray", "gray"),
+            ]
+        )
+        self.density_combo = self._combo([("Comfortable", "comfortable"), ("Compact", "compact")])
+        self.preview_combo = self._combo([("Small", "small"), ("Medium", "medium"), ("Large", "large")])
+        self.log_combo = self._combo([("Collapsed", "collapsed"), ("Expanded", "expanded")])
+
+        appearance = QGroupBox("Appearance")
+        appearance.setObjectName("settingsGroup")
+        appearance_form = QFormLayout(appearance)
+        appearance_form.addRow("Theme", self.theme_combo)
+        appearance_form.addRow("Accent color", self.accent_combo)
+        appearance_form.addRow("UI density", self.density_combo)
+        appearance_form.addRow("Preview size", self.preview_combo)
+        appearance_form.addRow("Startup log", self.log_combo)
+        layout.addWidget(appearance)
+
+        self.open_output_after = QCheckBox("Open output folder after generation")
+        self.show_summary_after = QCheckBox("Show job summary after generation")
+        self.use_last_preset = QCheckBox("Use last selected preset on startup")
+        workflow = QGroupBox("Workflow Preferences")
+        workflow.setObjectName("settingsGroup")
+        workflow_layout = QVBoxLayout(workflow)
+        workflow_layout.addWidget(self.open_output_after)
+        workflow_layout.addWidget(self.show_summary_after)
+        workflow_layout.addWidget(self.use_last_preset)
+        layout.addWidget(workflow)
+
+        about = QGroupBox("About / Quick Help")
+        about.setObjectName("settingsGroup")
+        about_layout = QVBoxLayout(about)
+        about_text = QLabel(
+            f"Spool House Studio {version or ''}\n"
+            "Built by ChronicLand420\n\n"
+            "Workflow: add artwork, pick an artwork style, generate, review outputs, then open STL/SVG/job summary.\n\n"
+            f"Output folder: {output_dir}"
+        )
+        about_text.setWordWrap(True)
+        about_text.setObjectName("mutedText")
+        about_layout.addWidget(about_text)
+        layout.addWidget(about)
+
+        button_row = QHBoxLayout()
+        self.reset_button = QPushButton("Reset UI Preferences")
+        self.reset_button.setObjectName("secondaryButton")
+        self.close_button = QPushButton("Close")
+        self.close_button.setObjectName("primaryButton")
+        button_row.addWidget(self.reset_button)
+        button_row.addStretch(1)
+        button_row.addWidget(self.close_button)
+        layout.addLayout(button_row)
+
+        self.reset_button.clicked.connect(self.reset_preferences)
+        self.close_button.clicked.connect(self.accept)
+        for combo in [self.theme_combo, self.accent_combo, self.density_combo, self.preview_combo, self.log_combo]:
+            combo.currentIndexChanged.connect(self._emit_changed)
+        for checkbox in [self.open_output_after, self.show_summary_after, self.use_last_preset]:
+            checkbox.toggled.connect(self._emit_changed)
+
+        self.set_preferences(preferences)
+
+    def _combo(self, values: list[tuple[str, str]]) -> QComboBox:
+        combo = QComboBox()
+        for label, data in values:
+            combo.addItem(label, data)
+        return combo
+
+    def _set_combo(self, combo: QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(max(0, index))
+
+    def set_preferences(self, preferences: UiPreferences) -> None:
+        self._syncing = True
+        self.last_cleanup_preset = preferences.last_cleanup_preset
+        self._set_combo(self.theme_combo, preferences.appearance_theme)
+        self._set_combo(self.accent_combo, preferences.accent_color)
+        self._set_combo(self.density_combo, preferences.ui_density)
+        self._set_combo(self.preview_combo, preferences.preview_size)
+        self._set_combo(self.log_combo, preferences.startup_log_behavior)
+        self.open_output_after.setChecked(preferences.open_output_folder_after_generation)
+        self.show_summary_after.setChecked(preferences.show_job_summary_after_generation)
+        self.use_last_preset.setChecked(preferences.use_last_selected_preset)
+        self._syncing = False
+
+    def preferences(self) -> UiPreferences:
+        return UiPreferences(
+            appearance_theme=str(self.theme_combo.currentData() or "dark"),
+            accent_color=str(self.accent_combo.currentData() or "purple"),
+            ui_density=str(self.density_combo.currentData() or "comfortable"),
+            preview_size=str(self.preview_combo.currentData() or "medium"),
+            startup_log_behavior=str(self.log_combo.currentData() or "collapsed"),
+            open_output_folder_after_generation=self.open_output_after.isChecked(),
+            show_job_summary_after_generation=self.show_summary_after.isChecked(),
+            use_last_selected_preset=self.use_last_preset.isChecked(),
+            last_cleanup_preset=self.last_cleanup_preset,
+        )
+
+    def reset_preferences(self) -> None:
+        self.set_preferences(default_ui_preferences())
+        self.preferences_changed.emit(default_ui_preferences())
+
+    def _emit_changed(self) -> None:
+        if self._syncing:
+            return
+        self.preferences_changed.emit(self.preferences())
 
 
 class PipelineWorker(QThread):
@@ -227,11 +401,15 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.config = load_config(Path("config/config.yaml"))
+        self.ui_preferences_path = ui_preferences_path(self.config.project_root)
+        self.ui_preferences = load_ui_preferences(self.ui_preferences_path)
         self.logger = configure_logging(self.config.log_dir)
         self.worker: PipelineWorker | None = None
         self.current_output_dir: Path | None = None
         self.current_stem = ""
         self.rooms: dict[str, RoomCard] = {}
+        self.settings_dialog: SettingsDialog | None = None
+        self._ui_ready = False
         self.log_expanded = False
         self.pending_jobs: list[Path] = []
         self.batch_total = 0
@@ -249,6 +427,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(1360, 820)
         self._build_ui()
+        self._ui_ready = True
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -282,8 +461,17 @@ class MainWindow(QMainWindow):
         self.header_status_badge.setObjectName("headerStatusBadge")
         self.header_status_badge.setProperty("state", "ready")
         self.header_status_badge.setAlignment(Qt.AlignCenter)
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.setObjectName("secondaryButton")
+        self.settings_button.setToolTip("Open appearance, theme, preview, and workflow preferences.")
+        self.settings_button.clicked.connect(self.open_settings)
+        header_actions = QVBoxLayout()
+        header_actions.setContentsMargins(0, 0, 0, 0)
+        header_actions.setSpacing(8)
+        header_actions.addWidget(self.header_status_badge)
+        header_actions.addWidget(self.settings_button)
         header_layout.addLayout(brand_layout, 1)
-        header_layout.addWidget(self.header_status_badge, 0, Qt.AlignTop)
+        header_layout.addLayout(header_actions, 0)
         root.addWidget(header)
 
         main_splitter = QSplitter(Qt.Horizontal)
@@ -326,7 +514,8 @@ class MainWindow(QMainWindow):
         root.addWidget(self.vertical_splitter, 1)
         self.setCentralWidget(central)
         self._apply_style()
-        self.set_log_expanded(False)
+        self._apply_preview_size()
+        self.set_log_expanded(self.ui_preferences.startup_log_behavior == "expanded")
 
     def _left_panel(self) -> QWidget:
         scroll = QScrollArea()
@@ -531,6 +720,9 @@ class MainWindow(QMainWindow):
             ],
             self.config.stl.detail_mode,
         )
+        initial_preset = self.config.silhouette.cleanup_preset
+        if self.ui_preferences.use_last_selected_preset and self.ui_preferences.last_cleanup_preset:
+            initial_preset = self.ui_preferences.last_cleanup_preset
         self.cleanup_preset = self._combo(
             [
                 ("Default", "default"),
@@ -540,9 +732,9 @@ class MainWindow(QMainWindow):
                 ("Splatter Logo", "splatter_logo"),
                 ("Detail Preserving", "detail_preserving"),
             ],
-            self.config.silhouette.cleanup_preset,
+            initial_preset,
         )
-        self.cleanup_preset.currentIndexChanged.connect(self._update_preset_help)
+        self.cleanup_preset.currentIndexChanged.connect(self._cleanup_preset_changed)
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
         self.base_height = self._double_spin(0.2, 10.0, self.config.stl.base_height_mm)
         self.threshold = self._spin(0, 255, self.config.silhouette.threshold_value)
@@ -654,6 +846,39 @@ class MainWindow(QMainWindow):
         description = PRESET_DESCRIPTIONS.get(preset, "Choose how aggressively artwork cleanup should remove small artifacts.")
         self.preset_help.setText(description)
         self.cleanup_preset.setToolTip(description)
+
+    def _cleanup_preset_changed(self) -> None:
+        self._update_preset_help()
+        if not self._ui_ready or not self.ui_preferences.use_last_selected_preset:
+            return
+        self.ui_preferences = replace(
+            self.ui_preferences,
+            last_cleanup_preset=self._combo_value(self.cleanup_preset),
+        )
+        self._save_ui_preferences()
+        if self.settings_dialog:
+            self.settings_dialog.last_cleanup_preset = self.ui_preferences.last_cleanup_preset
+
+    def open_settings(self) -> None:
+        if self.settings_dialog is None:
+            self.settings_dialog = SettingsDialog(self.ui_preferences, self.version, self.config.output_dir, self)
+            self.settings_dialog.preferences_changed.connect(self.update_ui_preferences)
+        else:
+            self.settings_dialog.set_preferences(self.ui_preferences)
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
+
+    def update_ui_preferences(self, preferences: UiPreferences) -> None:
+        last_preset = preferences.last_cleanup_preset if preferences.use_last_selected_preset else ""
+        self.ui_preferences = replace(preferences, last_cleanup_preset=last_preset)
+        self._save_ui_preferences()
+        self._apply_style()
+        self._apply_preview_size()
+        self.set_log_expanded(self.ui_preferences.startup_log_behavior == "expanded")
+
+    def _save_ui_preferences(self) -> None:
+        save_ui_preferences(self.ui_preferences_path, self.ui_preferences)
 
     def _form_group(self, title: str, rows: list[tuple[str, QWidget]]) -> QGroupBox:
         group = QGroupBox(title)
@@ -880,6 +1105,10 @@ class MainWindow(QMainWindow):
         self.logs.append(f"Batch complete: {self.batch_success_count}/{total} succeeded; elapsed {_format_duration(elapsed)}.")
         self._set_processing_buttons_enabled(True)
         self.worker = None
+        if self.current_output_dir and self.ui_preferences.open_output_folder_after_generation:
+            self.open_path(self.current_output_dir)
+        if self.current_output_dir and self.ui_preferences.show_job_summary_after_generation:
+            self.open_path(self.current_output_dir / "job_summary.md")
 
     def reset_rooms(self) -> None:
         for room in self.rooms.values():
@@ -1123,55 +1352,156 @@ class MainWindow(QMainWindow):
         label.clear()
         label.setText(placeholder)
 
+    def _apply_preview_size(self) -> None:
+        profile = PREVIEW_SIZES.get(self.ui_preferences.preview_size, PREVIEW_SIZES["medium"])
+        room_width, room_height = profile["room"]
+        review_width, review_height = profile["review"]
+        padding = profile["padding"]
+        spacing = profile["spacing"]
+        max_room_height = profile["room_height"]
+        if self.ui_preferences.ui_density == "compact":
+            padding = max(7, padding - 2)
+            spacing = max(5, spacing - 2)
+            max_room_height = max(136, max_room_height - 10)
+
+        for room in self.rooms.values():
+            room.set_visual_size(room_width, room_height, max_room_height, padding, spacing)
+        for label in [getattr(self, "review_before", None), getattr(self, "review_after", None)]:
+            if label:
+                label.setFixedSize(review_width, review_height)
+        for label in getattr(self, "production_thumbs", {}).values():
+            label.setFixedSize(review_width, review_height)
+        if self.current_output_dir:
+            self.refresh_review()
+
+    def _theme_tokens(self) -> dict[str, str]:
+        accent, accent_border, accent_hover = ACCENT_STYLES.get(
+            self.ui_preferences.accent_color,
+            ACCENT_STYLES["purple"],
+        )
+        accent_text = ACCENT_TEXT_COLORS.get(self.ui_preferences.accent_color, "#111318")
+        compact = self.ui_preferences.ui_density == "compact"
+        if self.ui_preferences.appearance_theme == "light":
+            tokens = {
+                "bg": "#f3f0f7",
+                "panel": "#ffffff",
+                "panel_alt": "#f8fafc",
+                "field": "#f8fafc",
+                "text": "#1f2937",
+                "title_text": "#111827",
+                "muted": "#5f6b7a",
+                "muted_2": "#708093",
+                "border": "#cbd5e1",
+                "border_soft": "#d8dee8",
+                "button": "#e8edf5",
+                "button_hover": "#dde5ef",
+                "button_text": "#111827",
+                "disabled_bg": "#edf1f6",
+                "disabled_text": "#94a3b8",
+                "progress_bg": "#d8dee8",
+                "active_bg": "#f4edff",
+                "badge_bg": "#eef2f7",
+                "done_bg": "#dcfce7",
+                "done_border": "#22c55e",
+                "done_text": "#166534",
+                "warning_bg": "#f4eaff",
+                "warning_text": "#4c1d95",
+                "failed_border": "#dc2626",
+            }
+        else:
+            tokens = {
+                "bg": "#101217",
+                "panel": "#171a22",
+                "panel_alt": "#181c24",
+                "field": "#0d0f14",
+                "text": "#e8eaed",
+                "title_text": "#f2f4f7",
+                "muted": "#9aa4b2",
+                "muted_2": "#aeb7c5",
+                "border": "#2a303a",
+                "border_soft": "#303744",
+                "button": "#2b313d",
+                "button_hover": "#343c49",
+                "button_text": "#f2f4f7",
+                "disabled_bg": "#20242c",
+                "disabled_text": "#687386",
+                "progress_bg": "#272d38",
+                "active_bg": "#202331",
+                "badge_bg": "#20242e",
+                "done_bg": "#183326",
+                "done_border": "#55b47a",
+                "done_text": "#c9f7d9",
+                "warning_bg": "#30243b",
+                "warning_text": "#f4eaff",
+                "failed_border": "#e56b6f",
+            }
+        tokens.update(
+            {
+                "accent": accent,
+                "accent_border": accent_border,
+                "accent_hover": accent_hover,
+                "accent_text": accent_text,
+                "font_size": "10pt" if compact else "10.5pt",
+                "button_padding": "6px 8px" if compact else "8px 10px",
+                "section_toggle_padding": "8px 10px" if compact else "10px 12px",
+                "group_margin_top": "8px" if compact else "12px",
+            }
+        )
+        return tokens
 
     def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
-            QWidget { background: #101217; color: #e8eaed; font-family: Segoe UI; font-size: 10.5pt; }
+        tokens = self._theme_tokens()
+        style = """
+            QWidget { background: __BG__; color: __TEXT__; font-family: Segoe UI; font-size: __FONT_SIZE__; }
             QLabel { background: transparent; }
-            #appHeader { background: #171a22; border: 1px solid #2a303a; border-radius: 10px; }
-            #appTitle { font-size: 27px; font-weight: 800; color: #A855F7; padding: 0; }
-            #appSubtitle { color: #9aa4b2; padding: 0; }
-            #creatorCredit { color: #b7c0cf; font-size: 9pt; padding: 0; }
-            #workflowTagline { color: #8e98a8; font-size: 9.5pt; padding-top: 3px; }
-            #headerStatusBadge { background: #20242e; border: 1px solid #3a4352; border-radius: 12px; color: #dce1e8; font-weight: 800; padding: 6px 12px; min-width: 92px; }
-            #headerStatusBadge[state="running"] { background: #2a1f3a; border-color: #A855F7; color: #f4eaff; }
-            #headerStatusBadge[state="done"] { background: #183326; border-color: #55b47a; color: #c9f7d9; }
-            #headerStatusBadge[state="warning"] { background: #30243b; border-color: #C084FC; color: #f4eaff; }
-            #sectionTitle { color: #f2f4f7; font-size: 12pt; font-weight: 800; margin-top: 4px; }
-            #mutedText { color: #9aa4b2; font-size: 9pt; }
-            #presetDescription { color: #aeb7c5; font-size: 9pt; line-height: 130%; padding: 2px 0 0 0; }
-            #statusSummary { color: #c7d0dd; font-size: 9.5pt; padding: 8px 10px 0 10px; }
-            #sidePanel, #workflowCard { background: #171a22; border: 1px solid #2a303a; border-radius: 10px; }
+            #appHeader { background: __PANEL__; border: 1px solid __BORDER__; border-radius: 10px; }
+            #appTitle { font-size: 27px; font-weight: 800; color: __ACCENT__; padding: 0; }
+            #appSubtitle { color: __MUTED__; padding: 0; }
+            #creatorCredit { color: __MUTED_2__; font-size: 9pt; padding: 0; }
+            #workflowTagline { color: __MUTED__; font-size: 9.5pt; padding-top: 3px; }
+            #dialogTitle { font-size: 20px; font-weight: 800; color: __ACCENT__; }
+            #headerStatusBadge { background: __BADGE_BG__; border: 1px solid __BORDER_SOFT__; border-radius: 12px; color: __TEXT__; font-weight: 800; padding: 6px 12px; min-width: 92px; }
+            #headerStatusBadge[state="running"] { background: __ACTIVE_BG__; border-color: __ACCENT__; color: __TITLE_TEXT__; }
+            #headerStatusBadge[state="done"] { background: __DONE_BG__; border-color: __DONE_BORDER__; color: __DONE_TEXT__; }
+            #headerStatusBadge[state="warning"] { background: __WARNING_BG__; border-color: __ACCENT_HOVER__; color: __WARNING_TEXT__; }
+            #sectionTitle { color: __TITLE_TEXT__; font-size: 12pt; font-weight: 800; margin-top: 4px; }
+            #mutedText { color: __MUTED__; font-size: 9pt; }
+            #presetDescription { color: __MUTED_2__; font-size: 9pt; line-height: 130%; padding: 2px 0 0 0; }
+            #statusSummary { color: __MUTED_2__; font-size: 9.5pt; padding: 8px 10px 0 10px; }
+            #sidePanel, #workflowCard { background: __PANEL__; border: 1px solid __BORDER__; border-radius: 10px; }
             #collapsibleSection { background: transparent; border: 0; }
-            QScrollArea { border: 0; background: #101217; }
-            QSplitter::handle { background: #1c212b; width: 5px; height: 5px; }
-            QPushButton { background: #2b313d; color: #f2f4f7; border: 1px solid #3a4352; padding: 8px 10px; border-radius: 5px; font-weight: 600; }
-            QPushButton:hover { background: #343c49; }
-            QPushButton#primaryButton { background: #A855F7; color: #111318; border: 1px solid #7E22CE; font-weight: 800; }
-            QPushButton#primaryButton:hover { background: #C084FC; }
-            QPushButton#sectionToggle { text-align: left; background: #181d27; border: 1px solid #303744; color: #f2f4f7; font-weight: 800; padding: 10px 12px; border-radius: 8px; }
-            QPushButton#sectionToggle:hover { border-color: #A855F7; background: #202331; }
-            QPushButton:disabled { background: #20242c; color: #687386; border: 1px solid #2a303a; }
-            QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #0d0f14; border: 1px solid #303744; color: #eef1f5; border-radius: 5px; padding: 5px; }
+            QDialog { background: __BG__; }
+            QScrollArea { border: 0; background: __BG__; }
+            QSplitter::handle { background: __BORDER__; width: 5px; height: 5px; }
+            QPushButton { background: __BUTTON__; color: __BUTTON_TEXT__; border: 1px solid __BORDER_SOFT__; padding: __BUTTON_PADDING__; border-radius: 5px; font-weight: 600; }
+            QPushButton:hover { background: __BUTTON_HOVER__; }
+            QPushButton#primaryButton { background: __ACCENT__; color: __ACCENT_TEXT__; border: 1px solid __ACCENT_BORDER__; font-weight: 800; }
+            QPushButton#primaryButton:hover { background: __ACCENT_HOVER__; }
+            QPushButton#sectionToggle { text-align: left; background: __PANEL_ALT__; border: 1px solid __BORDER_SOFT__; color: __TITLE_TEXT__; font-weight: 800; padding: __SECTION_TOGGLE_PADDING__; border-radius: 8px; }
+            QPushButton#sectionToggle:hover { border-color: __ACCENT__; background: __ACTIVE_BG__; }
+            QPushButton:disabled { background: __DISABLED_BG__; color: __DISABLED_TEXT__; border: 1px solid __BORDER__; }
+            QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: __FIELD__; border: 1px solid __BORDER_SOFT__; color: __TEXT__; border-radius: 5px; padding: 5px; }
             QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; }
-            QGroupBox#settingsGroup { background: #151922; border: 1px solid #2a303a; border-radius: 9px; margin-top: 12px; padding-top: 10px; font-weight: 800; color: #A855F7; }
+            QGroupBox#settingsGroup { background: __PANEL_ALT__; border: 1px solid __BORDER__; border-radius: 9px; margin-top: __GROUP_MARGIN_TOP__; padding-top: 10px; font-weight: 800; color: __ACCENT__; }
             QGroupBox#settingsGroup::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-            #formLabel { color: #aeb7c5; font-weight: 500; }
-            QCheckBox { color: #dce1e8; spacing: 8px; }
-            #roomCard { background: #181c24; border: 1px solid #303744; border-radius: 9px; }
-            #roomCard[state="active"] { border-color: #A855F7; background: #202331; }
-            #roomCard[state="done"] { border-color: #55b47a; }
-            #roomCard[state="warning"] { border-color: #A855F7; }
-            #roomCard[state="failed"] { border-color: #e56b6f; }
-            #roomTitle { font-weight: 700; color: #f2f4f7; }
-            #roomStatus { color: #9aa4b2; font-size: 9pt; }
-            #thumb { background: #0d0f14; border: 1px solid #303744; border-radius: 5px; color: #687386; }
-            #connector { color: #596272; font-size: 13px; }
-            QProgressBar { border: 0; height: 6px; background: #272d38; border-radius: 3px; }
-            QProgressBar::chunk { background: #A855F7; border-radius: 3px; }
-            """
-        )
+            #formLabel { color: __MUTED_2__; font-weight: 500; }
+            QCheckBox { color: __TEXT__; spacing: 8px; }
+            #roomCard { background: __PANEL_ALT__; border: 1px solid __BORDER_SOFT__; border-radius: 9px; }
+            #roomCard[state="active"] { border-color: __ACCENT__; background: __ACTIVE_BG__; }
+            #roomCard[state="done"] { border-color: __DONE_BORDER__; }
+            #roomCard[state="warning"] { border-color: __ACCENT__; }
+            #roomCard[state="failed"] { border-color: __FAILED_BORDER__; }
+            #roomTitle { font-weight: 700; color: __TITLE_TEXT__; }
+            #roomStatus { color: __MUTED__; font-size: 9pt; }
+            #thumb { background: __FIELD__; border: 1px solid __BORDER_SOFT__; border-radius: 5px; color: __DISABLED_TEXT__; }
+            #connector { color: __MUTED__; font-size: 13px; }
+            QProgressBar { border: 0; height: 6px; background: __PROGRESS_BG__; border-radius: 3px; }
+            QProgressBar::chunk { background: __ACCENT__; border-radius: 3px; }
+        """
+        replacements = {f"__{key.upper()}__": value for key, value in tokens.items()}
+        for placeholder, value in replacements.items():
+            style = style.replace(placeholder, value)
+        self.setStyleSheet(style)
 
 
 def main() -> None:

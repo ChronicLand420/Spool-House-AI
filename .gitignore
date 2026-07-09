@@ -11,6 +11,8 @@ __pycache__/
 .coverage
 htmlcov/
 
+config/ui_preferences.json
+
 input/*
 output/*
 logs/*

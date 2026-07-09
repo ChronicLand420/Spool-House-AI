@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from spool_house_ai.ui_preferences import (
+    UiPreferences,
+    default_ui_preferences,
+    load_ui_preferences,
+    save_ui_preferences,
+    ui_preferences_from_mapping,
+)
+
+
+class UiPreferencesTests(unittest.TestCase):
+    def test_missing_file_uses_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prefs = load_ui_preferences(Path(temp_dir) / "missing.json")
+            self.assertEqual(prefs, default_ui_preferences())
+
+    def test_save_and_load_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ui_preferences.json"
+            expected = UiPreferences(
+                appearance_theme="light",
+                accent_color="green",
+                ui_density="compact",
+                preview_size="large",
+                startup_log_behavior="expanded",
+                open_output_folder_after_generation=True,
+                show_job_summary_after_generation=True,
+                use_last_selected_preset=False,
+                last_cleanup_preset="drip_logo",
+            )
+            save_ui_preferences(path, expected)
+            self.assertEqual(load_ui_preferences(path), expected)
+
+    def test_invalid_values_fall_back_to_defaults(self) -> None:
+        prefs = ui_preferences_from_mapping(
+            {
+                "appearance_theme": "infrared",
+                "accent_color": "laser",
+                "ui_density": "tiny",
+                "preview_size": "billboard",
+                "startup_log_behavior": "sometimes",
+                "open_output_folder_after_generation": "yes",
+                "show_job_summary_after_generation": 1,
+                "use_last_selected_preset": None,
+                "last_cleanup_preset": 123,
+            }
+        )
+        self.assertEqual(prefs, default_ui_preferences())
+
+    def test_corrupt_json_uses_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ui_preferences.json"
+            path.write_text("{bad json", encoding="utf-8")
+            self.assertEqual(load_ui_preferences(path), default_ui_preferences())
+
+    def test_unknown_values_do_not_replace_valid_values(self) -> None:
+        defaults = default_ui_preferences()
+        prefs = ui_preferences_from_mapping(
+            {
+                "appearance_theme": "light",
+                "accent_color": "nope",
+                "ui_density": "compact",
+                "preview_size": "medium",
+                "startup_log_behavior": "expanded",
+            }
+        )
+        self.assertEqual(prefs.appearance_theme, "light")
+        self.assertEqual(prefs.accent_color, defaults.accent_color)
+        self.assertEqual(prefs.ui_density, "compact")
+        self.assertEqual(prefs.preview_size, "medium")
+        self.assertEqual(prefs.startup_log_behavior, "expanded")
+
+
+if __name__ == "__main__":
+    unittest.main()

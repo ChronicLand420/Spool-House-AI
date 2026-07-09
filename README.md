@@ -48,6 +48,8 @@ The app supports:
 - Use `Output Vault` and `Production Review` to inspect generated files and preview thumbnails.
 - Open the output folder, STL, SVG, or preview after generation.
 
+The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, and optional post-generation actions. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
+
 The visual theme is an original underground maker bunker/factory interface. It does not use Fallout Shelter assets, names, characters, or copied art.
 
 ## Screenshots
