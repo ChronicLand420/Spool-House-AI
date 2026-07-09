@@ -28,8 +28,8 @@ def bundled_root() -> Path | None:
 def resource_path(relative_path: Path | str) -> Path:
     relative = Path(relative_path)
     candidates = [
-        Path.cwd() / relative,
         runtime_root() / relative,
+        Path.cwd() / relative,
     ]
     bundle = bundled_root()
     if bundle is not None:
