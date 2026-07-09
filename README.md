@@ -34,7 +34,7 @@ Create a Windows desktop shortcut for the GUI:
 python scripts/create_desktop_shortcut.py
 ```
 
-This creates `Spool House AI GUI` on the current user's Desktop and points it at this repository with the repo root as the working directory.
+This creates `Spool House Studio` on the current user's Desktop and points it at this repository with the repo root as the working directory. The source app also sets the same purple SPAI icon for the running window/taskbar when launched with `python -m spool_house_ai.gui`.
 
 The app supports:
 
@@ -156,6 +156,29 @@ If PowerShell blocks activation, run:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+## Portable Windows Build
+
+Portable EXE packaging is build-only and uses separate build dependencies so normal source users do not need PyInstaller:
+
+```powershell
+python -m pip install -r requirements-build.txt
+python scripts/build_portable_windows.py
+```
+
+By default, the build helper writes to a temp review folder:
+
+```text
+%TEMP%\shai_phase13_packaging\dist\Spool House Studio\
+```
+
+The helper creates a one-folder portable app, copies `assets/`, copies `config/config.yaml`, creates `input/`, `output/`, and `logs/`, and uses `assets/spai_icon_purple.ico` for the EXE icon. Do not commit `build/`, `dist/`, `release/`, generated EXE files, local outputs, logs, or `config/ui_preferences.json`.
+
+To inspect the PyInstaller command without building:
+
+```powershell
+python scripts/build_portable_windows.py --dry-run
 ```
 
 ## Run

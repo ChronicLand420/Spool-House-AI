@@ -13,6 +13,13 @@ htmlcov/
 
 config/ui_preferences.json
 
+build/
+dist/
+release/
+*.exe
+*.msi
+*.zip
+
 input/*
 output/*
 logs/*

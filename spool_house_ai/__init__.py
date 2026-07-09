@@ -1,3 +1,3 @@
-"""Spool House AI Version 1 package."""
+"""Spool House Studio package."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.0-alpha"

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 
-SHORTCUT_NAME = "Spool House AI GUI.lnk"
+SHORTCUT_NAME = "Spool House Studio.lnk"
 
 
 def main() -> None:

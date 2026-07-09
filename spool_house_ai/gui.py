@@ -9,7 +9,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
-    from PySide6.QtGui import QDesktopServices, QFontMetrics, QPixmap
+    from PySide6.QtGui import QDesktopServices, QFontMetrics, QIcon, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -43,6 +43,14 @@ except ModuleNotFoundError as error:
     print("Install GUI dependencies with: python -m pip install -r requirements.txt")
     raise SystemExit(1) from error
 
+from spool_house_ai.app_identity import (
+    APP_DISPLAY_NAME,
+    APP_ORGANIZATION_NAME,
+    app_icon_path,
+    config_path,
+    load_app_version,
+    set_windows_app_user_model_id,
+)
 from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config
 from spool_house_ai.logging_setup import configure_logging
 from spool_house_ai.pipeline import ImagePipeline
@@ -64,8 +72,6 @@ ROOMS = [
     "Render Bay",
     "Output Vault",
 ]
-
-APP_DISPLAY_NAME = "Spool House Studio"
 
 PRESET_DESCRIPTIONS = {
     "default": "Balanced cleanup for mixed artwork. Keeps likely intentional nearby detail.",
@@ -400,7 +406,7 @@ class PipelineWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.config = load_config(Path("config/config.yaml"))
+        self.config = load_config(config_path())
         self.ui_preferences_path = ui_preferences_path(self.config.project_root)
         self.ui_preferences = load_ui_preferences(self.ui_preferences_path)
         self.logger = configure_logging(self.config.log_dir)
@@ -423,11 +429,20 @@ class MainWindow(QMainWindow):
         self.runtime_timer = QTimer(self)
         self.runtime_timer.setInterval(1000)
         self.runtime_timer.timeout.connect(self.update_runtime_status)
-        self.version = _load_version(self.config.project_root)
+        self.version = load_app_version()
         self.setWindowTitle(APP_DISPLAY_NAME)
+        self._apply_window_icon()
         self.resize(1360, 820)
         self._build_ui()
         self._ui_ready = True
+
+    def _apply_window_icon(self) -> None:
+        icon_path = app_icon_path()
+        if not icon_path.exists():
+            return
+        icon = QIcon(str(icon_path))
+        if not icon.isNull():
+            self.setWindowIcon(icon)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -1505,17 +1520,18 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    set_windows_app_user_model_id()
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setOrganizationName(APP_ORGANIZATION_NAME)
+    icon_path = app_icon_path()
+    if icon_path.exists():
+        icon = QIcon(str(icon_path))
+        if not icon.isNull():
+            app.setWindowIcon(icon)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
-
-
-def _load_version(project_root: Path) -> str:
-    version_path = project_root / "VERSION"
-    if not version_path.exists():
-        return ""
-    return version_path.read_text(encoding="utf-8").strip()
 
 
 def _format_duration(seconds: float) -> str:
