@@ -428,12 +428,20 @@ class SettingsDialog(QDialog):
         self._emit_changed()
 
     def open_output_folder(self) -> None:
-        path = self._current_output_folder()
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path = self._current_output_folder()
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception as error:
+            QMessageBox.warning(self, APP_DISPLAY_NAME, f"Could not open output folder:\n{error}")
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def copy_output_folder(self) -> None:
-        path = self._current_output_folder()
+        try:
+            path = self._current_output_folder()
+        except Exception as error:
+            QMessageBox.warning(self, APP_DISPLAY_NAME, f"Could not copy output folder path:\n{error}")
+            return
         QApplication.clipboard().setText(str(path))
 
     def _current_output_folder(self) -> Path:

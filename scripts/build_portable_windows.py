@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REVIEW_DIR = Path(tempfile.gettempdir()) / "shai_phase13_packaging"
+DEFAULT_REVIEW_DIR = Path(tempfile.gettempdir()) / "shai_spool_house_studio_build"
 DEFAULT_DIST_DIR = DEFAULT_REVIEW_DIR / "dist"
 DEFAULT_WORK_DIR = DEFAULT_REVIEW_DIR / "build"
 

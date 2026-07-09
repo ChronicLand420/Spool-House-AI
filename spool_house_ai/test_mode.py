@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from spool_house_ai.config import AppConfig
+from spool_house_ai.output_paths import build_job_output_paths
 from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.processing.analysis import analyze_image
 
@@ -93,56 +94,58 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
     logger.info("Created V2 test image: %s", test_image)
     stl_created = pipeline.process(test_image)
 
-    output_dir = config.output_dir / test_image.stem
+    paths = build_job_output_paths(config.output_dir, test_image)
+    output_dir = paths.job_root
     expected_outputs = [
-        output_dir / f"{test_image.stem}_cleaned.png",
-        output_dir / f"{test_image.stem}_silhouette.png",
-        output_dir / f"{test_image.stem}.svg",
-        output_dir / f"{test_image.stem}_review.svg",
-        output_dir / f"{test_image.stem}.stl",
-        output_dir / f"{test_image.stem}_preview.png",
-        output_dir / f"{test_image.stem}_preview_cleaned.png",
-        output_dir / f"{test_image.stem}_preview_threshold.png",
-        output_dir / f"{test_image.stem}_preview_contours.png",
-        output_dir / f"{test_image.stem}_preview_svg.png",
-        output_dir / f"{test_image.stem}_preview_stl.png",
-        output_dir / "mesh_report.json",
-        output_dir / "job_status.json",
+        paths.cleaned_png_path,
+        paths.silhouette_png_path,
+        paths.svg_path,
+        paths.review_svg_path,
+        paths.stl_path,
+        paths.preview_path,
+        paths.previews_dir / f"{test_image.stem}_preview_cleaned.png",
+        paths.previews_dir / f"{test_image.stem}_preview_threshold.png",
+        paths.previews_dir / f"{test_image.stem}_preview_contours.png",
+        paths.previews_dir / f"{test_image.stem}_preview_svg.png",
+        paths.previews_dir / f"{test_image.stem}_preview_stl.png",
+        paths.mesh_report_path,
+        paths.job_status_path,
     ]
     missing = [path for path in expected_outputs if not path.exists()]
     if missing:
         for path in missing:
             logger.error("Test mode missing expected output: %s", path)
         return False
-    if not _mesh_report_is_sane(output_dir / "mesh_report.json", logger):
+    if not _mesh_report_is_sane(paths.mesh_report_path, logger):
         return False
 
     geometry_image = create_geometry_test_image(config)
     logger.info("Created V4 geometry test image: %s", geometry_image)
     geometry_stl_created = pipeline.process(geometry_image)
-    geometry_output_dir = config.output_dir / geometry_image.stem
+    geometry_paths = build_job_output_paths(config.output_dir, geometry_image)
+    geometry_output_dir = geometry_paths.job_root
     geometry_expected = [
-        geometry_output_dir / "raw_threshold.png",
-        geometry_output_dir / "raw_contours.png",
-        geometry_output_dir / "smoothed_contours.png",
-        geometry_output_dir / "final_vector_preview.png",
-        geometry_output_dir / f"{geometry_image.stem}.svg",
-        geometry_output_dir / f"{geometry_image.stem}_review.svg",
-        geometry_output_dir / f"{geometry_image.stem}.stl",
-        geometry_output_dir / "mesh_report.json",
-        geometry_output_dir / "job_status.json",
+        geometry_paths.previews_dir / "raw_threshold.png",
+        geometry_paths.previews_dir / "raw_contours.png",
+        geometry_paths.previews_dir / "smoothed_contours.png",
+        geometry_paths.previews_dir / "final_vector_preview.png",
+        geometry_paths.svg_path,
+        geometry_paths.review_svg_path,
+        geometry_paths.stl_path,
+        geometry_paths.mesh_report_path,
+        geometry_paths.job_status_path,
     ]
     missing_geometry = [path for path in geometry_expected if not path.exists()]
     if missing_geometry:
         for path in missing_geometry:
             logger.error("Geometry test missing expected output: %s", path)
         return False
-    if not _mesh_report_is_sane(geometry_output_dir / "mesh_report.json", logger):
+    if not _mesh_report_is_sane(geometry_paths.mesh_report_path, logger):
         return False
 
     analysis = analyze_image(
-        geometry_output_dir / f"{geometry_image.stem}_cleaned.png",
-        geometry_output_dir / f"{geometry_image.stem}_test_reanalysis.png",
+        geometry_paths.cleaned_png_path,
+        geometry_paths.previews_dir / f"{geometry_image.stem}_test_reanalysis.png",
         config.silhouette,
     )
     if analysis.geometry_report.smoothed_total_points >= analysis.geometry_report.original_total_points:
@@ -167,10 +170,10 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
     real_world_image = create_real_world_geometry_test_image(config)
     logger.info("Created V4 real-world geometry test image: %s", real_world_image)
     real_world_created = pipeline.process(real_world_image)
-    real_world_output_dir = config.output_dir / real_world_image.stem
+    real_world_paths = build_job_output_paths(config.output_dir, real_world_image)
     real_world_analysis = analyze_image(
-        real_world_output_dir / f"{real_world_image.stem}_cleaned.png",
-        real_world_output_dir / f"{real_world_image.stem}_test_reanalysis.png",
+        real_world_paths.cleaned_png_path,
+        real_world_paths.previews_dir / f"{real_world_image.stem}_test_reanalysis.png",
         config.silhouette,
     )
     if real_world_analysis.geometry_report.bbox_change_percent > config.silhouette.max_bbox_change_percent:
@@ -185,8 +188,8 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
 
     fallback_config = replace_for_fallback_test(config)
     fallback_analysis = analyze_image(
-        real_world_output_dir / f"{real_world_image.stem}_cleaned.png",
-        real_world_output_dir / f"{real_world_image.stem}_fallback_reanalysis.png",
+        real_world_paths.cleaned_png_path,
+        real_world_paths.previews_dir / f"{real_world_image.stem}_fallback_reanalysis.png",
         fallback_config.silhouette,
     )
     if not fallback_analysis.geometry_report.fallback_used:
@@ -197,31 +200,32 @@ def run_test_mode(config: AppConfig, pipeline: ImagePipeline, logger: logging.Lo
     v5_image = create_v5_cleanup_test_image(config)
     logger.info("Created V5 smart cleanup test image: %s", v5_image)
     v5_created = pipeline.process(v5_image)
-    v5_output_dir = config.output_dir / v5_image.stem
+    v5_paths = build_job_output_paths(config.output_dir, v5_image)
+    v5_output_dir = v5_paths.job_root
     v5_expected = [
-        v5_output_dir / "removed_islands_debug.png",
-        v5_output_dir / "original_vs_cleaned_compare.png",
-        v5_output_dir / "original_vs_body_mask_compare.png",
-        v5_output_dir / "original_vs_detail_mask_compare.png",
-        v5_output_dir / "original_vs_final_vector_compare.png",
-        v5_output_dir / "original_vs_stl_preview_compare.png",
-        v5_output_dir / f"{v5_image.stem}_body_mask.png",
-        v5_output_dir / f"{v5_image.stem}_detail_mask.png",
-        v5_output_dir / f"{v5_image.stem}_review.svg",
-        v5_output_dir / f"{v5_image.stem}.stl",
-        v5_output_dir / "mesh_report.json",
-        v5_output_dir / "job_status.json",
+        v5_paths.previews_dir / "removed_islands_debug.png",
+        v5_paths.previews_dir / "original_vs_cleaned_compare.png",
+        v5_paths.previews_dir / "original_vs_body_mask_compare.png",
+        v5_paths.previews_dir / "original_vs_detail_mask_compare.png",
+        v5_paths.previews_dir / "original_vs_final_vector_compare.png",
+        v5_paths.previews_dir / "original_vs_stl_preview_compare.png",
+        v5_paths.body_mask_path,
+        v5_paths.detail_mask_path,
+        v5_paths.review_svg_path,
+        v5_paths.stl_path,
+        v5_paths.mesh_report_path,
+        v5_paths.job_status_path,
     ]
     missing_v5 = [path for path in v5_expected if not path.exists()]
     if missing_v5:
         for path in missing_v5:
             logger.error("V5 test missing expected output: %s", path)
         return False
-    if not _mesh_report_is_sane(v5_output_dir / "mesh_report.json", logger):
+    if not _mesh_report_is_sane(v5_paths.mesh_report_path, logger):
         return False
     v5_analysis = analyze_image(
-        v5_output_dir / f"{v5_image.stem}_cleaned.png",
-        v5_output_dir / f"{v5_image.stem}_test_reanalysis.png",
+        v5_paths.cleaned_png_path,
+        v5_paths.previews_dir / f"{v5_image.stem}_test_reanalysis.png",
         config.silhouette,
     )
     if not np.any(v5_analysis.removed_island_mask):

@@ -4,7 +4,7 @@ Spool House Studio automates image-to-product preparation for simple 3D printabl
 
 Created by ChronicLand420.
 
-## V3 Workflow
+## Current Workflow
 
 1. Watch or scan the `input/` folder.
 2. Detect new `.png`, `.jpg`, or `.jpeg` files.
@@ -170,7 +170,7 @@ python scripts/build_portable_windows.py
 By default, the build helper writes to a temp review folder:
 
 ```text
-%TEMP%\shai_phase13_packaging\dist\Spool House Studio\
+%TEMP%\shai_spool_house_studio_build\dist\Spool House Studio\
 ```
 
 The helper creates a one-folder portable app, copies `assets/`, copies `config/config.yaml`, creates `input/`, `output/`, and `logs/`, and uses `assets/spai_icon_purple.ico` for the EXE icon. Do not commit `build/`, `dist/`, `release/`, generated EXE files, local outputs, logs, or `config/ui_preferences.json`.
@@ -195,13 +195,13 @@ Watch the input folder:
 python -m spool_house_ai.main --watch
 ```
 
-Run the built-in V2 test:
+Run the built-in pipeline test:
 
 ```powershell
 python -m spool_house_ai.main --test
 ```
 
-Launch the V3 desktop app:
+Launch the desktop app:
 
 ```powershell
 python -m spool_house_ai.gui
