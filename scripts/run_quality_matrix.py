@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config
+from spool_house_ai.output_paths import build_job_output_paths
 from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.test_mode import (
     create_geometry_test_image,
@@ -153,9 +154,10 @@ def _run_one_job(
         logger.exception("Quality matrix job crashed for %s preset=%s", image_path, preset)
         return _failed_result(image_record, preset, backend, job_slug, error)
 
-    output_dir = preset_output_root / image_path.stem
-    job_status_path = output_dir / "job_status.json"
-    mesh_report_path = output_dir / "mesh_report.json"
+    paths = build_job_output_paths(preset_output_root, image_path)
+    output_dir = paths.job_root
+    job_status_path = paths.job_status_path
+    mesh_report_path = paths.mesh_report_path
     job_status = _read_json(job_status_path)
     mesh_report = _read_json(mesh_report_path)
     artifact_summary = job_status.get("artifact_summary") or {}
@@ -178,20 +180,20 @@ def _run_one_job(
         "face_count": mesh_report.get("face_count"),
         "bounds": mesh_report.get("bounding_box_mm", []),
         "elapsed_time": job_status.get("duration_seconds"),
-        "svg_path": job_status.get("svg_path", str(output_dir / f"{image_path.stem}.svg")),
-        "review_svg_path": job_status.get("review_svg_path", str(output_dir / f"{image_path.stem}_review.svg")),
-        "stl_path": job_status.get("stl_path", str(output_dir / f"{image_path.stem}.stl")),
-        "mesh_report_path": str(mesh_report_path),
-        "job_status_path": str(job_status_path),
-        "output_folder": str(output_dir),
+        "svg_path": job_status.get("svg_path", str(paths.svg_path)),
+        "review_svg_path": job_status.get("review_svg_path", str(paths.review_svg_path)),
+        "stl_path": job_status.get("stl_path", str(paths.stl_path)),
+        "mesh_report_path": job_status.get("mesh_report_path", str(mesh_report_path)),
+        "job_status_path": job_status.get("job_status_path", str(job_status_path)),
+        "output_folder": job_status.get("output_folder_path", str(output_dir)),
         "artifact_summary": artifact_summary,
         "warnings": warnings,
         "failures": failures,
         "quality_score": score,
         "visual_usability_note": visual_note,
-        "preview_svg_path": str(output_dir / f"{image_path.stem}_preview_svg.png"),
-        "preview_stl_path": str(output_dir / f"{image_path.stem}_preview_stl.png"),
-        "preview_final_path": str(output_dir / f"{image_path.stem}_preview.png"),
+        "preview_svg_path": str(paths.previews_dir / f"{image_path.stem}_preview_svg.png"),
+        "preview_stl_path": str(paths.previews_dir / f"{image_path.stem}_preview_stl.png"),
+        "preview_final_path": job_status.get("preview_path", str(paths.preview_path)),
         "contact_sheet_key": job_slug,
     }
 

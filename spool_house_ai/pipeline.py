@@ -12,6 +12,7 @@ from typing import Any, Callable
 from PIL import UnidentifiedImageError
 
 from spool_house_ai.config import AppConfig
+from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths
 from spool_house_ai.processing.analysis import analyze_image, save_mask
 from spool_house_ai.processing.background import background_removal_available, remove_background
 from spool_house_ai.processing.preview import create_preview, save_stage_previews
@@ -35,22 +36,22 @@ class ImagePipeline:
             self.logger.warning("Skipped missing file: %s", image_path)
             return False
 
-        output_dir = self.config.output_dir / image_path.stem
-        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = build_job_output_paths(self.config.output_dir, image_path)
+        paths.create_directories()
 
-        cleaned_png_path = output_dir / f"{image_path.stem}_cleaned.png"
-        silhouette_png_path = output_dir / f"{image_path.stem}_silhouette.png"
-        svg_path = output_dir / f"{image_path.stem}.svg"
-        review_svg_path = output_dir / f"{image_path.stem}_review.svg"
-        stl_path = output_dir / f"{image_path.stem}.stl"
-        mesh_report_path = output_dir / "mesh_report.json"
-        job_status_path = output_dir / "job_status.json"
-        job_summary_path = output_dir / "job_summary.md"
-        preview_path = output_dir / f"{image_path.stem}_preview.png"
-        body_mask_path = output_dir / f"{image_path.stem}_body_mask.png"
-        detail_mask_path = output_dir / f"{image_path.stem}_detail_mask.png"
-        contour_debug_path = output_dir / f"{image_path.stem}_contour_debug.png"
-        settings_path = output_dir / "job_settings.yaml"
+        cleaned_png_path = paths.cleaned_png_path
+        silhouette_png_path = paths.silhouette_png_path
+        svg_path = paths.svg_path
+        review_svg_path = paths.review_svg_path
+        stl_path = paths.stl_path
+        mesh_report_path = paths.mesh_report_path
+        job_status_path = paths.job_status_path
+        job_summary_path = paths.job_summary_path
+        preview_path = paths.preview_path
+        body_mask_path = paths.body_mask_path
+        detail_mask_path = paths.detail_mask_path
+        contour_debug_path = paths.contour_debug_path
+        settings_path = paths.settings_path
         warnings: list[str] = []
         failures: list[str] = []
         stl_result: StlCreationResult | None = None
@@ -65,13 +66,7 @@ class ImagePipeline:
                     job_status_path,
                     config=self.config,
                     image_path=image_path,
-                    output_dir=output_dir,
-                    svg_path=svg_path,
-                    review_svg_path=review_svg_path,
-                    stl_path=stl_path,
-                    mesh_report_path=mesh_report_path,
-                    job_status_path=job_status_path,
-                    job_summary_path=job_summary_path,
+                    paths=paths,
                     stl_result=stl_result,
                     mesh_report=mesh_report,
                     warnings=warnings,
@@ -89,6 +84,13 @@ class ImagePipeline:
 
         self.logger.info("Processing image: %s", image_path.name)
         _emit(stage_callback, "Intake Room", "active", "Image queued for processing", image_path)
+        try:
+            if image_path != paths.source_copy_path.resolve():
+                shutil.copy2(image_path, paths.source_copy_path)
+        except Exception as error:
+            message = f"Could not copy source image into job package: {error}"
+            warnings.append(message)
+            self.logger.warning(message)
         _emit(stage_callback, "Intake Room", "done", "Image accepted", image_path)
         if not self.config.pipeline.background_removal_enabled:
             self.logger.info("Background removal is disabled; using the original image as the cleaned PNG")
@@ -141,7 +143,7 @@ class ImagePipeline:
                 self.logger.warning(message)
             save_mask(analysis.body_mask, body_mask_path)
             save_mask(analysis.detail_mask, detail_mask_path)
-            save_mask(analysis.hole_mask, output_dir / f"{image_path.stem}_hole_mask.png")
+            save_mask(analysis.hole_mask, paths.hole_mask_path)
             self.logger.info(
                 "Analysis stage complete: body/hole/detail masks saved; contour points %s -> %s",
                 analysis.geometry_report.original_total_points,
@@ -167,15 +169,19 @@ class ImagePipeline:
                 original_path=image_path,
                 cleaned_png_path=cleaned_png_path,
                 analysis=analysis,
-                output_dir=output_dir,
+                output_dir=paths.previews_dir,
                 stem=image_path.stem,
                 config=self.config.preview,
                 svg_path=svg_path,
                 stl_path=stl_path,
             )
-            preview_contours = output_dir / f"{image_path.stem}_preview_contours.png"
+            preview_contours = paths.previews_dir / f"{image_path.stem}_preview_contours.png"
             if preview_contours.exists():
                 shutil.copyfile(preview_contours, contour_debug_path)
+            preview_geometry_report = paths.previews_dir / "geometry_report.txt"
+            if preview_geometry_report.exists():
+                shutil.copyfile(preview_geometry_report, paths.geometry_report_path)
+                preview_geometry_report.unlink(missing_ok=True)
             _emit(stage_callback, "Vector Workshop", "done", "SVG created", svg_path)
         except ImportError as error:
             failures.append(f"Missing dependency while analyzing image: {error}")
@@ -243,7 +249,7 @@ class ImagePipeline:
 
         _write_job_settings(settings_path, self.config)
         write_job_status()
-        _emit(stage_callback, "Output Vault", "done", "Output folder is ready", preview_path)
+        _emit(stage_callback, "Output Vault", "done", "Files saved to job folder", preview_path)
 
         self.logger.info("Created cleaned PNG: %s", cleaned_png_path)
         self.logger.info("Created SVG: %s", svg_path)
@@ -320,13 +326,7 @@ def _write_job_status(
     *,
     config: AppConfig,
     image_path: Path,
-    output_dir: Path,
-    svg_path: Path,
-    review_svg_path: Path,
-    stl_path: Path,
-    mesh_report_path: Path,
-    job_status_path: Path,
-    job_summary_path: Path,
+    paths: JobOutputPaths,
     stl_result: StlCreationResult | None,
     mesh_report: MeshReport | None,
     warnings: list[str],
@@ -343,13 +343,29 @@ def _write_job_status(
         "finished_at": finished_at.isoformat(),
         "duration_seconds": round(duration_seconds, 3),
         "input_file_path": str(image_path),
-        "output_folder_path": str(output_dir),
-        "svg_path": str(svg_path),
-        "review_svg_path": str(review_svg_path),
-        "stl_path": str(stl_path),
-        "mesh_report_path": str(mesh_report_path),
-        "job_status_path": str(job_status_path),
-        "job_summary_path": str(job_summary_path),
+        "output_root_path": str(paths.output_root),
+        "output_folder_path": str(paths.job_root),
+        "job_root_path": str(paths.job_root),
+        "source_folder_path": str(paths.source_dir),
+        "svg_folder_path": str(paths.svg_dir),
+        "stl_folder_path": str(paths.stl_dir),
+        "previews_folder_path": str(paths.previews_dir),
+        "reports_folder_path": str(paths.reports_dir),
+        "source_copy_path": str(paths.source_copy_path),
+        "cleaned_png_path": str(paths.cleaned_png_path),
+        "silhouette_png_path": str(paths.silhouette_png_path),
+        "body_mask_path": str(paths.body_mask_path),
+        "hole_mask_path": str(paths.hole_mask_path),
+        "detail_mask_path": str(paths.detail_mask_path),
+        "contour_debug_path": str(paths.contour_debug_path),
+        "preview_path": str(paths.preview_path),
+        "svg_path": str(paths.svg_path),
+        "review_svg_path": str(paths.review_svg_path),
+        "stl_path": str(paths.stl_path),
+        "mesh_report_path": str(paths.mesh_report_path),
+        "job_status_path": str(paths.job_status_path),
+        "job_summary_path": str(paths.job_summary_path),
+        "geometry_report_path": str(paths.geometry_report_path),
         "requested_backend": stl_result.requested_backend if stl_result else config.stl.stl_backend,
         "actual_backend": stl_result.actual_backend if stl_result else "",
         "fallback_used": stl_result.fallback_used if stl_result else False,
@@ -398,18 +414,29 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         "",
         "## Job",
         f"- Input: `{status.get('input_file_path', '')}`",
+        f"- Output root: `{status.get('output_root_path', '')}`",
         f"- Output folder: `{status.get('output_folder_path', '')}`",
         f"- Cleanup preset: `{(status.get('settings_used') or {}).get('silhouette', {}).get('cleanup_preset', '')}`",
         f"- Product mode: `{status.get('product_mode', '')}`",
         f"- Detail mode: `{status.get('detail_mode', '')}`",
         f"- Duration: `{status.get('duration_seconds', 0)}` seconds",
         "",
+        "## Folders",
+        f"- Source: `{status.get('source_folder_path', '')}`",
+        f"- SVG: `{status.get('svg_folder_path', '')}`",
+        f"- STL: `{status.get('stl_folder_path', '')}`",
+        f"- Previews: `{status.get('previews_folder_path', '')}`",
+        f"- Reports: `{status.get('reports_folder_path', '')}`",
+        "",
         "## Files",
+        f"- Source copy: `{status.get('source_copy_path', '')}`",
         f"- SVG: `{status.get('svg_path', '')}`",
         f"- Review SVG: `{status.get('review_svg_path', '')}`",
         f"- STL: `{status.get('stl_path', '')}`",
+        f"- Preview: `{status.get('preview_path', '')}`",
         f"- Mesh report: `{status.get('mesh_report_path', '')}`",
         f"- Job status: `{status.get('job_status_path', '')}`",
+        f"- Job summary: `{status.get('job_summary_path', '')}`",
         "",
         "## Mesh",
         f"- Requested backend: `{status.get('requested_backend', '')}`",

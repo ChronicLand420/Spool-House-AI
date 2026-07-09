@@ -24,6 +24,7 @@ class UiPreferences:
     show_job_summary_after_generation: bool = False
     use_last_selected_preset: bool = True
     last_cleanup_preset: str = ""
+    output_folder: str = ""
 
 
 def default_ui_preferences() -> UiPreferences:
@@ -69,6 +70,7 @@ def ui_preferences_from_mapping(raw: dict[str, Any]) -> UiPreferences:
         ),
         use_last_selected_preset=_bool(raw.get("use_last_selected_preset"), defaults.use_last_selected_preset),
         last_cleanup_preset=_text(raw.get("last_cleanup_preset"), defaults.last_cleanup_preset),
+        output_folder=_text(raw.get("output_folder"), defaults.output_folder),
     )
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from spool_house_ai.config import load_config
+from spool_house_ai.output_paths import build_job_output_paths
 from spool_house_ai.pipeline import ImagePipeline
 
 
@@ -38,19 +39,40 @@ class PipelineJobStatusTests(unittest.TestCase):
 
             self.assertTrue(ImagePipeline(config, logger).process(input_path))
 
-            job_dir = output_dir / input_path.stem
-            status_path = job_dir / "job_status.json"
-            summary_path = job_dir / "job_summary.md"
+            paths = build_job_output_paths(output_dir, input_path)
+            job_dir = paths.job_root
+            status_path = paths.job_status_path
+            summary_path = paths.job_summary_path
+            self.assertTrue(paths.source_dir.exists())
+            self.assertTrue(paths.svg_dir.exists())
+            self.assertTrue(paths.stl_dir.exists())
+            self.assertTrue(paths.previews_dir.exists())
+            self.assertTrue(paths.reports_dir.exists())
+            self.assertTrue(paths.source_copy_path.exists())
+            self.assertTrue(paths.svg_path.exists())
+            self.assertTrue(paths.review_svg_path.exists())
+            self.assertTrue(paths.stl_path.exists())
+            self.assertTrue(paths.preview_path.exists())
+            self.assertTrue(paths.mesh_report_path.exists())
             self.assertTrue(status_path.exists())
             self.assertTrue(summary_path.exists())
 
             status = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertEqual(status["input_file_path"], str(input_path.resolve()))
+            self.assertEqual(status["output_root_path"], str(output_dir.resolve()))
             self.assertEqual(status["output_folder_path"], str(job_dir))
-            self.assertEqual(status["svg_path"], str(job_dir / f"{input_path.stem}.svg"))
-            self.assertEqual(status["review_svg_path"], str(job_dir / f"{input_path.stem}_review.svg"))
-            self.assertEqual(status["stl_path"], str(job_dir / f"{input_path.stem}.stl"))
-            self.assertEqual(status["mesh_report_path"], str(job_dir / "mesh_report.json"))
+            self.assertEqual(status["job_root_path"], str(job_dir))
+            self.assertEqual(status["source_folder_path"], str(paths.source_dir))
+            self.assertEqual(status["svg_folder_path"], str(paths.svg_dir))
+            self.assertEqual(status["stl_folder_path"], str(paths.stl_dir))
+            self.assertEqual(status["previews_folder_path"], str(paths.previews_dir))
+            self.assertEqual(status["reports_folder_path"], str(paths.reports_dir))
+            self.assertEqual(status["source_copy_path"], str(paths.source_copy_path))
+            self.assertEqual(status["svg_path"], str(paths.svg_path))
+            self.assertEqual(status["review_svg_path"], str(paths.review_svg_path))
+            self.assertEqual(status["stl_path"], str(paths.stl_path))
+            self.assertEqual(status["preview_path"], str(paths.preview_path))
+            self.assertEqual(status["mesh_report_path"], str(paths.mesh_report_path))
             self.assertEqual(status["job_status_path"], str(status_path))
             self.assertEqual(status["job_summary_path"], str(summary_path))
             self.assertIn("started_at", status)
@@ -68,6 +90,8 @@ class PipelineJobStatusTests(unittest.TestCase):
             self.assertFalse(status["failures"])
             summary = summary_path.read_text(encoding="utf-8")
             self.assertIn("Ready for slicer review", summary)
+            self.assertIn("## Folders", summary)
+            self.assertIn(str(paths.reports_dir), summary)
             self.assertIn("Mesh", summary)
             self.assertIn("Artwork Cleanup", summary)
 

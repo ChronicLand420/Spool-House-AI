@@ -48,7 +48,7 @@ The app supports:
 - Use `Output Vault` and `Production Review` to inspect generated files and preview thumbnails.
 - Open the output folder, STL, SVG, or preview after generation.
 
-The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, and optional post-generation actions. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
+The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, and optional post-generation actions. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
 
 The visual theme is an original underground maker bunker/factory interface. It does not use Fallout Shelter assets, names, characters, or copied art.
 
@@ -233,32 +233,40 @@ For `example.png`, Spool House Studio writes:
 
 ```text
 output/example/
-  example_cleaned.png
-  example_silhouette.png
-  example_body_mask.png
-  example_hole_mask.png
-  example_detail_mask.png
-  example_contour_debug.png
-  example.svg
-  example_review.svg
-  example.stl
-  example_preview.png
-  example_preview_original.png
-  example_preview_cleaned.png
-  example_preview_threshold.png
-  example_preview_contours.png
-  example_preview_body_mask.png
-  example_preview_hole_mask.png
-  example_preview_detail_mask.png
-  example_preview_svg.png
-  example_preview_stl.png
-  mesh_report.json
-  job_status.json
-  job_summary.md
-  job_settings.yaml
+  source/
+    example.png
+  svg/
+    example.svg
+    example_review.svg
+  stl/
+    example.stl
+  previews/
+    example_cleaned.png
+    example_silhouette.png
+    example_body_mask.png
+    example_hole_mask.png
+    example_detail_mask.png
+    example_contour_debug.png
+    example_preview.png
+    example_preview_original.png
+    example_preview_cleaned.png
+    example_preview_threshold.png
+    example_preview_contours.png
+    example_preview_body_mask.png
+    example_preview_hole_mask.png
+    example_preview_detail_mask.png
+    example_preview_svg.png
+    example_preview_stl.png
+  reports/
+    mesh_report.json
+    job_status.json
+    job_summary.md
+    job_settings.yaml
 ```
 
 `example.svg` is the normal editable vector output. `example_review.svg` adds visible inspection layers for foreground/body contours, holes, preserved details, and ignored islands so the artwork is easier to inspect in Inkscape before STL export.
+
+The default output root is `output/`. In the GUI, use `Settings` -> `Output Folder` to choose a different root folder. New jobs still use the same per-image pattern, `<selected output root>/<input stem>/`, and then place files into the `source/`, `svg/`, `stl/`, `previews/`, and `reports/` subfolders. CLI runs continue to use `config/config.yaml` unless you change that config directly.
 
 The contour debug preview uses:
 

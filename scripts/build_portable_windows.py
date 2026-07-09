@@ -93,7 +93,8 @@ def _copy_release_files(app_dir: Path) -> None:
         "Spool House Studio Portable\n"
         "Built by ChronicLand420\n\n"
         "Run Spool House Studio.exe to launch the app.\n"
-        "Generated files are written to the output folder beside the executable.\n"
+        "Generated files are written to organized per-image job folders under output/ by default.\n"
+        "Use Settings -> Output Folder to choose a different output root.\n"
         "UI preferences are stored in config/ui_preferences.json after first launch.\n"
     )
     (app_dir / "README.txt").write_text(readme_text, encoding="utf-8")

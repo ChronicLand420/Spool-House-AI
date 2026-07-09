@@ -22,6 +22,7 @@ try:
         QGroupBox,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QListWidget,
         QListWidgetItem,
         QMainWindow,
@@ -53,6 +54,7 @@ from spool_house_ai.app_identity import (
 )
 from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config
 from spool_house_ai.logging_setup import configure_logging
+from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths, build_job_output_paths_for_stem
 from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.ui_preferences import (
     UiPreferences,
@@ -245,6 +247,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._syncing = False
         self.last_cleanup_preset = preferences.last_cleanup_preset
+        self.default_output_dir = output_dir
         self.setWindowTitle("Settings")
         self.setMinimumWidth(460)
 
@@ -297,6 +300,34 @@ class SettingsDialog(QDialog):
         workflow_layout.addWidget(self.use_last_preset)
         layout.addWidget(workflow)
 
+        output_group = QGroupBox("Output Folder")
+        output_group.setObjectName("settingsGroup")
+        output_layout = QVBoxLayout(output_group)
+        output_hint = QLabel("Choose where SVG, STL, previews, and reports are saved.")
+        output_hint.setObjectName("mutedText")
+        output_hint.setWordWrap(True)
+        self.output_folder_edit = QLineEdit()
+        self.output_folder_edit.setReadOnly(True)
+        self.output_folder_edit.setPlaceholderText(str(output_dir))
+        self.output_folder_edit.setToolTip("Leave blank to use the default project output folder.")
+        output_button_row = QHBoxLayout()
+        self.choose_output_button = QPushButton("Browse")
+        self.reset_output_button = QPushButton("Reset to Default")
+        self.open_output_root_button = QPushButton("Open")
+        self.copy_output_root_button = QPushButton("Copy Path")
+        for button in (
+            self.choose_output_button,
+            self.reset_output_button,
+            self.open_output_root_button,
+            self.copy_output_root_button,
+        ):
+            button.setObjectName("secondaryButton")
+            output_button_row.addWidget(button)
+        output_layout.addWidget(output_hint)
+        output_layout.addWidget(self.output_folder_edit)
+        output_layout.addLayout(output_button_row)
+        layout.addWidget(output_group)
+
         about = QGroupBox("About / Quick Help")
         about.setObjectName("settingsGroup")
         about_layout = QVBoxLayout(about)
@@ -304,7 +335,7 @@ class SettingsDialog(QDialog):
             f"Spool House Studio {version or ''}\n"
             "Built by ChronicLand420\n\n"
             "Workflow: add artwork, pick an artwork style, generate, review outputs, then open STL/SVG/job summary.\n\n"
-            f"Output folder: {output_dir}"
+            f"Default output folder: {output_dir}"
         )
         about_text.setWordWrap(True)
         about_text.setObjectName("mutedText")
@@ -327,6 +358,10 @@ class SettingsDialog(QDialog):
             combo.currentIndexChanged.connect(self._emit_changed)
         for checkbox in [self.open_output_after, self.show_summary_after, self.use_last_preset]:
             checkbox.toggled.connect(self._emit_changed)
+        self.choose_output_button.clicked.connect(self.choose_output_folder)
+        self.reset_output_button.clicked.connect(self.reset_output_folder)
+        self.open_output_root_button.clicked.connect(self.open_output_folder)
+        self.copy_output_root_button.clicked.connect(self.copy_output_folder)
 
         self.set_preferences(preferences)
 
@@ -351,6 +386,8 @@ class SettingsDialog(QDialog):
         self.open_output_after.setChecked(preferences.open_output_folder_after_generation)
         self.show_summary_after.setChecked(preferences.show_job_summary_after_generation)
         self.use_last_preset.setChecked(preferences.use_last_selected_preset)
+        self.output_folder_edit.setText(preferences.output_folder)
+        self.output_folder_edit.setToolTip(preferences.output_folder or str(self.default_output_dir))
         self._syncing = False
 
     def preferences(self) -> UiPreferences:
@@ -364,6 +401,7 @@ class SettingsDialog(QDialog):
             show_job_summary_after_generation=self.show_summary_after.isChecked(),
             use_last_selected_preset=self.use_last_preset.isChecked(),
             last_cleanup_preset=self.last_cleanup_preset,
+            output_folder=self.output_folder_edit.text().strip(),
         )
 
     def reset_preferences(self) -> None:
@@ -374,6 +412,35 @@ class SettingsDialog(QDialog):
         if self._syncing:
             return
         self.preferences_changed.emit(self.preferences())
+
+    def choose_output_folder(self) -> None:
+        start_dir = str(self._current_output_folder())
+        chosen = QFileDialog.getExistingDirectory(self, "Choose Output Folder", start_dir)
+        if not chosen:
+            return
+        self.output_folder_edit.setText(str(Path(chosen).expanduser().resolve()))
+        self.output_folder_edit.setToolTip(self.output_folder_edit.text())
+        self._emit_changed()
+
+    def reset_output_folder(self) -> None:
+        self.output_folder_edit.clear()
+        self.output_folder_edit.setToolTip(str(self.default_output_dir))
+        self._emit_changed()
+
+    def open_output_folder(self) -> None:
+        path = self._current_output_folder()
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def copy_output_folder(self) -> None:
+        path = self._current_output_folder()
+        QApplication.clipboard().setText(str(path))
+
+    def _current_output_folder(self) -> Path:
+        raw_path = self.output_folder_edit.text().strip()
+        if not raw_path:
+            return self.default_output_dir
+        return Path(raw_path).expanduser().resolve()
 
 
 class PipelineWorker(QThread):
@@ -399,7 +466,7 @@ class PipelineWorker(QThread):
             self.stage_changed.emit(room, state, message, str(thumbnail or ""))
 
         ok = pipeline.process(self.image_path, stage_callback=on_stage)
-        output_dir = self.config.output_dir / self.image_path.stem
+        output_dir = build_job_output_paths(self.config.output_dir, self.image_path).job_root
         self.finished_job.emit(ok, str(output_dir), self.image_path.stem, str(self.image_path), self.config.stl.stl_backend)
 
 
@@ -560,9 +627,14 @@ class MainWindow(QMainWindow):
         self.generate_all_button.setToolTip("Process every queued image one at a time.")
         self.generate_all_button.clicked.connect(self.generate_all)
         self.open_output_button = QPushButton("Open Output Folder")
+        self.open_output_button.setToolTip("Open the latest job folder after generation.")
         self.open_stl_button = QPushButton("Open STL")
         self.open_svg_button = QPushButton("Open SVG")
         self.open_preview_button = QPushButton("Open Preview")
+        self.open_output_root_button = QPushButton("Open Root Folder")
+        self.open_output_root_button.setToolTip("Open the root folder where new job folders are created.")
+        self.copy_output_root_button = QPushButton("Copy Root Path")
+        self.copy_output_root_button.setToolTip("Copy the root folder where new job folders are created.")
         self.copy_svg_button = QPushButton("Copy SVG Path")
         self.copy_stl_button = QPushButton("Copy STL Path")
         self.copy_mesh_report_button = QPushButton("Copy Mesh Report Path")
@@ -579,7 +651,9 @@ class MainWindow(QMainWindow):
         ]
         for button in self.output_buttons:
             button.setEnabled(False)
-        self.open_output_button.clicked.connect(lambda: self.open_path(self.current_output_dir))
+        self.open_output_button.clicked.connect(self.open_latest_or_root)
+        self.open_output_root_button.clicked.connect(self.open_output_root)
+        self.copy_output_root_button.clicked.connect(self.copy_output_root)
         self.open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
         self.open_svg_button.clicked.connect(lambda: self.open_named_output(".svg"))
         self.open_preview_button.clicked.connect(lambda: self.open_named_output("_preview.png"))
@@ -606,14 +680,16 @@ class MainWindow(QMainWindow):
         output_grid = QGridLayout()
         output_grid.setHorizontalSpacing(8)
         output_grid.setVerticalSpacing(8)
-        output_grid.addWidget(self.open_output_button, 0, 0, 1, 2)
-        output_grid.addWidget(self.open_stl_button, 1, 0)
-        output_grid.addWidget(self.open_svg_button, 1, 1)
-        output_grid.addWidget(self.open_preview_button, 2, 0, 1, 2)
-        output_grid.addWidget(self.copy_stl_button, 3, 0)
-        output_grid.addWidget(self.copy_svg_button, 3, 1)
-        output_grid.addWidget(self.copy_mesh_report_button, 4, 0, 1, 2)
-        output_grid.addWidget(self.copy_job_status_button, 5, 0, 1, 2)
+        output_grid.addWidget(self.open_output_root_button, 0, 0)
+        output_grid.addWidget(self.copy_output_root_button, 0, 1)
+        output_grid.addWidget(self.open_output_button, 1, 0, 1, 2)
+        output_grid.addWidget(self.open_stl_button, 2, 0)
+        output_grid.addWidget(self.open_svg_button, 2, 1)
+        output_grid.addWidget(self.open_preview_button, 3, 0, 1, 2)
+        output_grid.addWidget(self.copy_stl_button, 4, 0)
+        output_grid.addWidget(self.copy_svg_button, 4, 1)
+        output_grid.addWidget(self.copy_mesh_report_button, 5, 0, 1, 2)
+        output_grid.addWidget(self.copy_job_status_button, 6, 0, 1, 2)
         layout.addLayout(output_grid)
         review_title = QLabel("Stage Compare")
         review_title.setObjectName("sectionTitle")
@@ -891,9 +967,47 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._apply_preview_size()
         self.set_log_expanded(self.ui_preferences.startup_log_behavior == "expanded")
+        self._update_output_buttons()
 
     def _save_ui_preferences(self) -> None:
         save_ui_preferences(self.ui_preferences_path, self.ui_preferences)
+
+    def _effective_output_root(self, notify: bool = False) -> Path:
+        raw_path = self.ui_preferences.output_folder.strip()
+        if not raw_path:
+            return self.config.output_dir
+        try:
+            output_root = Path(raw_path).expanduser()
+            if not output_root.is_absolute():
+                output_root = (self.config.project_root / output_root).resolve()
+            else:
+                output_root = output_root.resolve()
+            output_root.mkdir(parents=True, exist_ok=True)
+            self._assert_writable_directory(output_root)
+            return output_root
+        except Exception as error:
+            message = f"Output folder unavailable; using default output folder: {error}"
+            if notify and self._ui_ready:
+                self.logs.append(message)
+                self._set_status_summary("Output folder warning", tooltip=message)
+            return self.config.output_dir
+
+    def _assert_writable_directory(self, output_root: Path) -> None:
+        probe = output_root / ".spool_house_write_test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+
+    def open_output_root(self) -> None:
+        self.open_path(self._effective_output_root(notify=True))
+
+    def copy_output_root(self) -> None:
+        self.copy_path(self._effective_output_root(notify=True), label="Copied output root")
+
+    def open_latest_or_root(self) -> None:
+        if self.current_output_dir and self.current_output_dir.exists():
+            self.open_path(self.current_output_dir)
+            return
+        self.open_output_root()
 
     def _form_group(self, title: str, rows: list[tuple[str, QWidget]]) -> QGroupBox:
         group = QGroupBox(title)
@@ -995,6 +1109,7 @@ class MainWindow(QMainWindow):
         self.update_runtime_status()
         self.reset_rooms()
         config = self._config_from_controls()
+        self._append_status_path("Output root", config.output_dir)
         self.worker = PipelineWorker(config, image_path)
         self.worker.stage_changed.connect(self.update_room)
         self.worker.log_line.connect(self.logs.append)
@@ -1064,7 +1179,14 @@ class MainWindow(QMainWindow):
             keychain_hole_diameter_mm=self.keychain_diameter.value(),
             output_scale_mm=self.output_scale.value(),
         )
-        return replace(self.config, pipeline=pipeline, silhouette=silhouette, svg=svg, stl=stl)
+        return replace(
+            self.config,
+            output_dir=self._effective_output_root(notify=True),
+            pipeline=pipeline,
+            silhouette=silhouette,
+            svg=svg,
+            stl=stl,
+        )
 
     def update_room(self, room: str, state: str, message: str, thumbnail: str) -> None:
         if room in self.rooms:
@@ -1078,10 +1200,11 @@ class MainWindow(QMainWindow):
         self.current_output_dir = Path(output_dir)
         self.current_stem = stem
         self._update_output_buttons()
-        mesh_report_path = self.current_output_dir / "mesh_report.json"
-        job_status_path = self.current_output_dir / "job_status.json"
+        mesh_report_path = self._report_output_path("mesh_report.json")
+        job_status_path = self._report_output_path("job_status.json")
         self._append_status_path("Input file", Path(input_path))
         self._append_status_path("Output folder", self.current_output_dir)
+        self.logs.append(f"Done - files saved to: {self.current_output_dir}")
         self.logs.append(f"Requested STL backend: {requested_backend}")
         job_warning_count = 0
         if mesh_report_path.exists():
@@ -1116,6 +1239,8 @@ class MainWindow(QMainWindow):
             f"{self.batch_warning_count} warnings, {self.batch_failure_count} failures - "
             f"elapsed {_format_duration(elapsed)}"
         )
+        if self.current_output_dir:
+            summary = f"{summary} - files saved to: {self.current_output_dir}"
         self._set_status_summary(summary, tooltip=summary)
         self.logs.append(f"Batch complete: {self.batch_success_count}/{total} succeeded; elapsed {_format_duration(elapsed)}.")
         self._set_processing_buttons_enabled(True)
@@ -1123,7 +1248,7 @@ class MainWindow(QMainWindow):
         if self.current_output_dir and self.ui_preferences.open_output_folder_after_generation:
             self.open_path(self.current_output_dir)
         if self.current_output_dir and self.ui_preferences.show_job_summary_after_generation:
-            self.open_path(self.current_output_dir / "job_summary.md")
+            self.open_path(self._report_output_path("job_summary.md"))
 
     def reset_rooms(self) -> None:
         for room in self.rooms.values():
@@ -1138,33 +1263,78 @@ class MainWindow(QMainWindow):
     def copy_output_path(self, filename: str) -> None:
         if not self.current_output_dir:
             return
-        self.copy_path(self.current_output_dir / filename)
+        self.copy_path(self._report_output_path(filename))
 
     def _named_output_path(self, suffix: str) -> Path | None:
         if not self.current_output_dir:
             return None
+        paths = self._current_job_paths()
         name = f"{self.current_stem}{suffix}" if suffix.startswith("_") else f"{self.current_stem}{suffix}"
+        if paths and suffix == ".stl":
+            return self._first_existing_path(paths.stl_path, self.current_output_dir / name)
+        if paths and suffix == ".svg":
+            return self._first_existing_path(paths.svg_path, self.current_output_dir / name)
+        if paths and suffix == "_preview.png":
+            return self._first_existing_path(paths.preview_path, self.current_output_dir / name)
+        if paths:
+            return self._first_existing_path(paths.previews_dir / name, self.current_output_dir / name)
         return self.current_output_dir / name
+
+    def _current_job_paths(self) -> JobOutputPaths | None:
+        if not self.current_output_dir or not self.current_stem:
+            return None
+        return build_job_output_paths_for_stem(self.current_output_dir.parent, self.current_stem)
+
+    def _report_output_path(self, filename: str) -> Path:
+        if not self.current_output_dir:
+            return Path(filename)
+        paths = self._current_job_paths()
+        if paths:
+            return self._first_existing_path(paths.reports_dir / filename, self.current_output_dir / filename)
+        return self.current_output_dir / filename
+
+    def _preview_output_path(self, filename: str) -> Path:
+        if not self.current_output_dir:
+            return Path(filename)
+        paths = self._current_job_paths()
+        if paths:
+            return self._first_existing_path(paths.previews_dir / filename, self.current_output_dir / filename)
+        return self.current_output_dir / filename
+
+    def _svg_output_path(self, filename: str) -> Path:
+        if not self.current_output_dir:
+            return Path(filename)
+        paths = self._current_job_paths()
+        if paths:
+            return self._first_existing_path(paths.svg_dir / filename, self.current_output_dir / filename)
+        return self.current_output_dir / filename
+
+    def _first_existing_path(self, *paths: Path) -> Path:
+        for path in paths:
+            if path.exists():
+                return path
+        return paths[0]
 
     def open_path(self, path: Path | None) -> None:
         if path and path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
-    def copy_path(self, path: Path | None) -> None:
+    def copy_path(self, path: Path | None, label: str = "Copied path") -> None:
         if path and path.exists():
             QApplication.clipboard().setText(str(path))
-            self._append_status_path("Copied path", path)
+            self._append_status_path(label, path)
 
     def _update_output_buttons(self) -> None:
         if not self.current_output_dir:
             for button in self.output_buttons:
                 button.setEnabled(False)
+            self.open_output_button.setEnabled(True)
             return
         svg_path = self._named_output_path(".svg")
         stl_path = self._named_output_path(".stl")
         preview_path = self._named_output_path("_preview.png")
-        mesh_report_path = self.current_output_dir / "mesh_report.json"
-        job_status_path = self.current_output_dir / "job_status.json"
+        mesh_report_path = self._report_output_path("mesh_report.json")
+        job_status_path = self._report_output_path("job_status.json")
         availability = {
             self.open_output_button: self.current_output_dir.exists(),
             self.open_stl_button: bool(stl_path and stl_path.exists()),
@@ -1323,24 +1493,24 @@ class MainWindow(QMainWindow):
     def refresh_review(self) -> None:
         if not self.current_output_dir or not self.current_output_dir.exists():
             return
-        original = self.current_output_dir / f"{self.current_stem}_preview_original.png"
+        original = self._preview_output_path(f"{self.current_stem}_preview_original.png")
         stage_files = {
             "original": original,
-            "cleaned": self.current_output_dir / f"{self.current_stem}_preview_cleaned.png",
-            "body": self.current_output_dir / f"{self.current_stem}_preview_body_mask.png",
-            "holes": self.current_output_dir / f"{self.current_stem}_preview_hole_mask.png",
-            "details": self.current_output_dir / f"{self.current_stem}_preview_detail_mask.png",
-            "vector": self.current_output_dir / f"{self.current_stem}_preview_svg.png",
-            "review SVG": self.current_output_dir / f"{self.current_stem}_preview_svg.png",
-            "STL": self.current_output_dir / f"{self.current_stem}_preview_stl.png",
+            "cleaned": self._preview_output_path(f"{self.current_stem}_preview_cleaned.png"),
+            "body": self._preview_output_path(f"{self.current_stem}_preview_body_mask.png"),
+            "holes": self._preview_output_path(f"{self.current_stem}_preview_hole_mask.png"),
+            "details": self._preview_output_path(f"{self.current_stem}_preview_detail_mask.png"),
+            "vector": self._preview_output_path(f"{self.current_stem}_preview_svg.png"),
+            "review SVG": self._preview_output_path(f"{self.current_stem}_preview_svg.png"),
+            "STL": self._preview_output_path(f"{self.current_stem}_preview_stl.png"),
         }
         self._set_label_pixmap(self.review_before, original, "before")
         self._set_label_pixmap(self.review_after, stage_files.get(self.review_stage.currentText(), original), "after")
         production_paths = {
             "Input": original,
-            "SVG": self.current_output_dir / f"{self.current_stem}_preview_svg.png",
-            "Review SVG": self.current_output_dir / f"{self.current_stem}_review.svg",
-            "Preview": self.current_output_dir / f"{self.current_stem}_preview.png",
+            "SVG": self._preview_output_path(f"{self.current_stem}_preview_svg.png"),
+            "Review SVG": self._svg_output_path(f"{self.current_stem}_review.svg"),
+            "Preview": self._preview_output_path(f"{self.current_stem}_preview.png"),
         }
         for name, label in self.production_thumbs.items():
             display_path = production_paths.get(name, original)
@@ -1348,7 +1518,7 @@ class MainWindow(QMainWindow):
             self._set_label_pixmap(label, fallback_preview, name)
             if display_path:
                 label.setToolTip(str(display_path))
-        report_path = self.current_output_dir / "geometry_report.txt"
+        report_path = self._report_output_path("geometry_report.txt")
         if report_path.exists():
             report = report_path.read_text(encoding="utf-8")
             self.geometry_report_view.setPlainText(report)

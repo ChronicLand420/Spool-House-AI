@@ -32,6 +32,7 @@ class UiPreferencesTests(unittest.TestCase):
                 show_job_summary_after_generation=True,
                 use_last_selected_preset=False,
                 last_cleanup_preset="drip_logo",
+                output_folder=str(Path(temp_dir) / "custom_output"),
             )
             save_ui_preferences(path, expected)
             self.assertEqual(load_ui_preferences(path), expected)
@@ -48,6 +49,7 @@ class UiPreferencesTests(unittest.TestCase):
                 "show_job_summary_after_generation": 1,
                 "use_last_selected_preset": None,
                 "last_cleanup_preset": 123,
+                "output_folder": 456,
             }
         )
         self.assertEqual(prefs, default_ui_preferences())
@@ -67,6 +69,7 @@ class UiPreferencesTests(unittest.TestCase):
                 "ui_density": "compact",
                 "preview_size": "medium",
                 "startup_log_behavior": "expanded",
+                "output_folder": str(Path(tempfile.gettempdir()) / "spool_house_outputs"),
             }
         )
         self.assertEqual(prefs.appearance_theme, "light")
@@ -74,6 +77,7 @@ class UiPreferencesTests(unittest.TestCase):
         self.assertEqual(prefs.ui_density, "compact")
         self.assertEqual(prefs.preview_size, "medium")
         self.assertEqual(prefs.startup_log_behavior, "expanded")
+        self.assertTrue(prefs.output_folder.endswith("spool_house_outputs"))
 
 
 if __name__ == "__main__":
