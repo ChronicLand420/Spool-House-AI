@@ -18,7 +18,7 @@ DEFAULT_WORK_DIR = DEFAULT_REVIEW_DIR / "build"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from spool_house_ai.app_identity import APP_DISPLAY_NAME, APP_ICON_RELATIVE_PATH
+from spool_house_ai.app_identity import APP_BUILD_ICON_RELATIVE_PATH, APP_DISPLAY_NAME
 
 
 def main() -> int:
@@ -58,7 +58,7 @@ def main() -> int:
 
 def _pyinstaller_command(dist_dir: Path, work_dir: Path) -> list[str]:
     spec_dir = work_dir / "spec"
-    icon_path = PROJECT_ROOT / APP_ICON_RELATIVE_PATH
+    icon_path = PROJECT_ROOT / APP_BUILD_ICON_RELATIVE_PATH
     return [
         sys.executable,
         "-m",

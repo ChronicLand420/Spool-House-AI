@@ -5,6 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from spool_house_ai.app_identity import APP_SHORTCUT_ICON_RELATIVE_PATH
+
 
 SHORTCUT_NAME = "Spool House Studio.lnk"
 
@@ -47,6 +53,8 @@ def _python_launcher(repo_root: Path) -> Path:
 
 def _existing_icon(repo_root: Path) -> Path | None:
     for relative_path in (
+        APP_SHORTCUT_ICON_RELATIVE_PATH,
+        "assets/branding/spool_house_wordmark_icon.ico",
         "assets/branding/spool_house_icon.ico",
         "assets/spai_icon_purple.ico",
         "assets/spool_house_ai.ico",

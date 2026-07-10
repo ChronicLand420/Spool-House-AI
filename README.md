@@ -50,6 +50,8 @@ The app supports:
 
 The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, and optional post-generation actions. The Spool House Orange accent uses the official logo orange while keeping the internal preference value `orange` for compatibility. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
 
+The Settings/About area also has optional Support / Contact buttons. They are disabled until real links are configured in `spool_house_ai/app_identity.py` through `APP_SUPPORT_URL`, `APP_CONTACT_URL`, `APP_CONTACT_EMAIL`, or `APP_GITHUB_URL`. Donations are optional; the app has no ads, tracking, export limits, or paywall logic.
+
 ## Branding Assets
 
 Spool House Studio keeps the official source logo separate from generated app assets:
@@ -59,9 +61,11 @@ assets/branding/spool_house_logo_source.png
 assets/branding/spool_house_logo_gui.png
 assets/branding/spool_house_icon.png
 assets/branding/spool_house_icon.ico
+assets/branding/spool_house_wordmark_icon.png
+assets/branding/spool_house_wordmark_icon.ico
 ```
 
-The full logo is used in the GUI header and Settings/About area. The simplified icon is used for the source app window/taskbar, desktop shortcut, and portable EXE build.
+The full logo is used in the GUI header and Settings/About area. The full wordmark icon is used for desktop shortcuts and the portable EXE/File Explorer identity. The simplified logo-only icon is used by the running Qt app for window/taskbar-sized runtime icons where Windows honors the application icon separately from the embedded EXE icon.
 
 The visual theme is an original underground maker bunker/factory interface. It does not use Fallout Shelter assets, names, characters, or copied art.
 
@@ -186,7 +190,7 @@ By default, the build helper writes to a temp review folder:
 %TEMP%\shai_spool_house_studio_build\dist\Spool House Studio\
 ```
 
-The helper creates a one-folder portable app, copies `assets/`, copies `config/config.yaml`, creates `input/`, `output/`, and `logs/`, and uses `assets/branding/spool_house_icon.ico` for the EXE icon. Do not commit `build/`, `dist/`, `release/`, generated EXE files, local outputs, logs, or `config/ui_preferences.json`.
+The helper creates a one-folder portable app, copies `assets/`, copies `config/config.yaml`, creates `input/`, `output/`, and `logs/`, and uses `assets/branding/spool_house_wordmark_icon.ico` for the EXE icon. Do not commit `build/`, `dist/`, `release/`, generated EXE files, local outputs, logs, or `config/ui_preferences.json`.
 
 To inspect the PyInstaller command without building:
 

@@ -9,13 +9,31 @@ from unittest.mock import patch
 
 from spool_house_ai import __version__
 from spool_house_ai.app_identity import (
+    APP_BUILD_ICON_RELATIVE_PATH,
+    APP_CONTACT_EMAIL,
+    APP_CONTACT_URL,
     APP_DISPLAY_NAME,
+    APP_GITHUB_URL,
     APP_ICON_RELATIVE_PATH,
     APP_LOGO_GUI_RELATIVE_PATH,
+    APP_MARK_ICON_ICO_RELATIVE_PATH,
+    APP_MARK_ICON_RELATIVE_PATH,
+    APP_RUNTIME_ICON_RELATIVE_PATH,
+    APP_SHORTCUT_ICON_RELATIVE_PATH,
+    APP_SUPPORT_URL,
     APP_USER_MODEL_ID,
+    APP_WORDMARK_ICON_ICO_RELATIVE_PATH,
+    APP_WORDMARK_ICON_RELATIVE_PATH,
     CONFIG_RELATIVE_PATH,
+    app_build_icon_path,
+    app_contact_url,
     app_logo_gui_path,
     app_icon_path,
+    app_mark_icon_path,
+    app_runtime_icon_path,
+    app_shortcut_icon_path,
+    app_support_url,
+    app_wordmark_icon_path,
     config_path,
     load_app_version,
     resource_path,
@@ -28,19 +46,33 @@ class AppIdentityTests(unittest.TestCase):
     def test_runtime_paths_find_required_files(self) -> None:
         self.assertTrue(config_path().exists())
         self.assertTrue(app_icon_path().exists())
+        self.assertTrue(app_runtime_icon_path().exists())
+        self.assertTrue(app_build_icon_path().exists())
+        self.assertTrue(app_shortcut_icon_path().exists())
         self.assertEqual(app_icon_path().suffix.lower(), ".ico")
         self.assertTrue(app_logo_gui_path().exists())
         self.assertEqual(app_logo_gui_path().suffix.lower(), ".png")
+        self.assertTrue(app_mark_icon_path().exists())
+        self.assertEqual(app_mark_icon_path().suffix.lower(), ".png")
+        self.assertTrue(app_wordmark_icon_path().exists())
+        self.assertEqual(app_wordmark_icon_path().suffix.lower(), ".png")
 
     def test_branding_asset_paths_use_spool_house_branding(self) -> None:
         self.assertEqual(APP_ICON_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_icon.ico")
         self.assertEqual(APP_LOGO_GUI_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_logo_gui.png")
+        self.assertEqual(APP_MARK_ICON_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_icon.png")
+        self.assertEqual(APP_MARK_ICON_ICO_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_icon.ico")
+        self.assertEqual(APP_WORDMARK_ICON_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_wordmark_icon.png")
+        self.assertEqual(APP_WORDMARK_ICON_ICO_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_wordmark_icon.ico")
+        self.assertEqual(APP_RUNTIME_ICON_RELATIVE_PATH, APP_MARK_ICON_ICO_RELATIVE_PATH)
+        self.assertEqual(APP_BUILD_ICON_RELATIVE_PATH, APP_WORDMARK_ICON_ICO_RELATIVE_PATH)
+        self.assertEqual(APP_SHORTCUT_ICON_RELATIVE_PATH, APP_WORDMARK_ICON_ICO_RELATIVE_PATH)
         self.assertTrue((Path.cwd() / "assets" / "branding" / "spool_house_logo_source.png").exists())
 
-    def test_shortcut_helper_prefers_branded_icon(self) -> None:
+    def test_shortcut_helper_prefers_wordmark_icon(self) -> None:
         self.assertEqual(
             _existing_icon(Path.cwd()),
-            Path.cwd() / "assets" / "branding" / "spool_house_icon.ico",
+            Path.cwd() / "assets" / "branding" / "spool_house_wordmark_icon.ico",
         )
 
     def test_display_identity_values_are_release_ready(self) -> None:
@@ -48,6 +80,14 @@ class AppIdentityTests(unittest.TestCase):
         self.assertEqual(APP_USER_MODEL_ID, "ChronicLand420.SpoolHouseStudio")
         self.assertEqual(load_app_version(), "v0.1.0-alpha")
         self.assertEqual(__version__, "0.1.0-alpha")
+
+    def test_support_contact_links_are_optional_placeholders(self) -> None:
+        self.assertEqual(APP_SUPPORT_URL, "")
+        self.assertEqual(APP_CONTACT_URL, "")
+        self.assertEqual(APP_CONTACT_EMAIL, "")
+        self.assertEqual(APP_GITHUB_URL, "")
+        self.assertEqual(app_support_url(), "")
+        self.assertEqual(app_contact_url(), "")
 
     def test_app_user_model_id_helper_is_safe_to_call(self) -> None:
         set_windows_app_user_model_id()

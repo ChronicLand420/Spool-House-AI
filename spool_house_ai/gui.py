@@ -48,7 +48,9 @@ from spool_house_ai.app_identity import (
     APP_DISPLAY_NAME,
     APP_ORGANIZATION_NAME,
     app_logo_gui_path,
-    app_icon_path,
+    app_contact_url,
+    app_runtime_icon_path,
+    app_support_url,
     config_path,
     load_app_version,
     set_windows_app_user_model_id,
@@ -306,6 +308,15 @@ class SettingsDialog(QDialog):
         header_row.addWidget(_brand_logo_label(92, 92), 0, Qt.AlignTop)
         layout.addLayout(header_row)
 
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(12)
+        self.settings_scroll.setWidget(scroll_content)
+
         self.theme_combo = self._combo([("Dark", "dark"), ("Light", "light")])
         self.accent_combo = self._combo(ACCENT_COLOR_OPTIONS)
         self.density_combo = self._combo([("Comfortable", "comfortable"), ("Compact", "compact")])
@@ -320,7 +331,7 @@ class SettingsDialog(QDialog):
         appearance_form.addRow("UI density", self.density_combo)
         appearance_form.addRow("Preview size", self.preview_combo)
         appearance_form.addRow("Startup log", self.log_combo)
-        layout.addWidget(appearance)
+        scroll_layout.addWidget(appearance)
 
         self.open_output_after = QCheckBox("Open output folder after generation")
         self.show_summary_after = QCheckBox("Show job summary after generation")
@@ -331,7 +342,7 @@ class SettingsDialog(QDialog):
         workflow_layout.addWidget(self.open_output_after)
         workflow_layout.addWidget(self.show_summary_after)
         workflow_layout.addWidget(self.use_last_preset)
-        layout.addWidget(workflow)
+        scroll_layout.addWidget(workflow)
 
         output_group = QGroupBox("Output Folder")
         output_group.setObjectName("settingsGroup")
@@ -359,7 +370,7 @@ class SettingsDialog(QDialog):
         output_layout.addWidget(output_hint)
         output_layout.addWidget(self.output_folder_edit)
         output_layout.addLayout(output_button_row)
-        layout.addWidget(output_group)
+        scroll_layout.addWidget(output_group)
 
         about = QGroupBox("About / Quick Help")
         about.setObjectName("settingsGroup")
@@ -376,7 +387,36 @@ class SettingsDialog(QDialog):
         about_text.setObjectName("mutedText")
         about_header.addWidget(about_text, 1)
         about_layout.addLayout(about_header)
-        layout.addWidget(about)
+        support_label = QLabel("Support / Contact")
+        support_label.setObjectName("supportTitle")
+        support_hint = QLabel("Optional links for supporting development or contacting the creator.")
+        support_hint.setObjectName("mutedText")
+        support_hint.setWordWrap(True)
+        support_row = QHBoxLayout()
+        self.support_button = QPushButton("Donate / Support")
+        self.contact_button = QPushButton("Contact")
+        self._configure_external_link_button(
+            self.support_button,
+            app_support_url(),
+            "Support Spool House Studio development",
+            "Support link is not configured yet.",
+        )
+        self._configure_external_link_button(
+            self.contact_button,
+            app_contact_url(),
+            "Contact ChronicLand420 about Spool House Studio",
+            "Contact link is not configured yet.",
+        )
+        support_row.addWidget(self.support_button)
+        support_row.addWidget(self.contact_button)
+        support_row.addStretch(1)
+        about_layout.addSpacing(6)
+        about_layout.addWidget(support_label)
+        about_layout.addWidget(support_hint)
+        about_layout.addLayout(support_row)
+        scroll_layout.addWidget(about)
+        scroll_layout.addStretch(1)
+        layout.addWidget(self.settings_scroll, 1)
 
         button_row = QHBoxLayout()
         self.reset_button = QPushButton("Reset UI Preferences")
@@ -400,6 +440,67 @@ class SettingsDialog(QDialog):
         self.copy_output_root_button.clicked.connect(self.copy_output_folder)
 
         self.set_preferences(preferences)
+        self._apply_screen_safe_geometry()
+
+    def _configure_external_link_button(
+        self,
+        button: QPushButton,
+        url: str,
+        enabled_tooltip: str,
+        disabled_tooltip: str,
+    ) -> None:
+        button.setObjectName("secondaryButton")
+        target = url.strip()
+        button.setEnabled(bool(target))
+        button.setToolTip(enabled_tooltip if target else disabled_tooltip)
+        if target:
+            button.clicked.connect(lambda _checked=False, link=target, label=button.text(): self._open_external_link(link, label))
+
+    def _open_external_link(self, url: str, label: str) -> None:
+        try:
+            opened = QDesktopServices.openUrl(QUrl(url))
+        except Exception:
+            opened = False
+        if not opened:
+            QMessageBox.warning(self, "Could Not Open Link", f"Could not open {label}.")
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._apply_screen_safe_geometry()
+
+    def _apply_screen_safe_geometry(self) -> None:
+        screen = self.screen()
+        if screen is None and self.parentWidget() is not None:
+            screen = self.parentWidget().screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(640, min(max(self.sizeHint().height(), 520), 720))
+            return
+
+        available = screen.availableGeometry()
+        max_width = max(520, int(available.width() * 0.92))
+        max_height = max(480, int(available.height() * 0.88))
+        target_width = min(max(620, self.sizeHint().width()), max_width)
+        target_height = min(max(540, self.sizeHint().height()), max_height)
+        self.setMaximumHeight(max_height)
+        self.resize(target_width, target_height)
+
+        frame = self.frameGeometry()
+        if self.parentWidget() is not None:
+            frame.moveCenter(self.parentWidget().frameGeometry().center())
+        else:
+            frame.moveCenter(available.center())
+
+        if frame.left() < available.left():
+            frame.moveLeft(available.left())
+        if frame.right() > available.right():
+            frame.moveRight(available.right())
+        if frame.top() < available.top():
+            frame.moveTop(available.top())
+        if frame.bottom() > available.bottom():
+            frame.moveBottom(available.bottom())
+        self.move(frame.topLeft())
 
     def _combo(self, values: list[tuple[str, str]]) -> QComboBox:
         combo = QComboBox()
@@ -548,7 +649,7 @@ class MainWindow(QMainWindow):
         self._ui_ready = True
 
     def _apply_window_icon(self) -> None:
-        icon_path = app_icon_path()
+        icon_path = app_runtime_icon_path()
         if not icon_path.exists():
             return
         icon = QIcon(str(icon_path))
@@ -1686,6 +1787,7 @@ class MainWindow(QMainWindow):
             #headerStatusBadge[state="done"] { background: __DONE_BG__; border-color: __DONE_BORDER__; color: __DONE_TEXT__; }
             #headerStatusBadge[state="warning"] { background: __WARNING_BG__; border-color: __ACCENT_HOVER__; color: __WARNING_TEXT__; }
             #sectionTitle { color: __TITLE_TEXT__; font-size: 12pt; font-weight: 800; margin-top: 4px; }
+            #supportTitle { color: __ACCENT__; font-size: 10.5pt; font-weight: 800; }
             #mutedText { color: __MUTED__; font-size: 9pt; }
             #presetDescription { color: __MUTED_2__; font-size: 9pt; line-height: 130%; padding: 2px 0 0 0; }
             #statusSummary { color: __MUTED_2__; font-size: 9.5pt; padding: 8px 10px 0 10px; }
@@ -1730,7 +1832,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setOrganizationName(APP_ORGANIZATION_NAME)
-    icon_path = app_icon_path()
+    icon_path = app_runtime_icon_path()
     if icon_path.exists():
         icon = QIcon(str(icon_path))
         if not icon.isNull():
