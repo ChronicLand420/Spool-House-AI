@@ -30,7 +30,7 @@ from spool_house_ai.test_mode import (
 
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-PRESETS = ("default", "logo_clean", "clean_logo", "drip_logo", "splatter_logo", "detail_preserving")
+PRESETS = ("default", "clean_logo", "detail_preserving", "drip_logo", "splatter_logo", "line_art")
 DEFAULT_REVIEW_DIR = Path(tempfile.gettempdir()) / "shai_quality_matrix"
 
 
@@ -344,7 +344,7 @@ def _write_recommendation_report(results: list[dict[str, Any]], review_dir: Path
                 f"- Recommended preset: `{best['preset']}`",
                 f"- Best score: {best['quality_score']} ({best['visual_usability_note']})",
                 f"- Worst preset: `{worst['preset']}` score {worst['quality_score']}",
-                f"- Logo clean helped: {_preset_helped(image_results, 'logo_clean')}",
+                f"- Clean Logo helped: {_preset_helped(image_results, 'clean_logo')}",
                 f"- Detail preserving helped: {_preset_helped(image_results, 'detail_preserving')}",
                 f"- Product-clean enough: {'yes' if best['quality_score'] >= 90 and not best['warnings'] and not best['failures'] else 'review first'}",
                 "",

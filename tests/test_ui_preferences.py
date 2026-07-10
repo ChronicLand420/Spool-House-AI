@@ -79,6 +79,10 @@ class UiPreferencesTests(unittest.TestCase):
         self.assertEqual(prefs.startup_log_behavior, "expanded")
         self.assertTrue(prefs.output_folder.endswith("spool_house_outputs"))
 
+    def test_legacy_logo_clean_last_preset_maps_to_clean_logo(self) -> None:
+        prefs = ui_preferences_from_mapping({"last_cleanup_preset": "logo_clean"})
+        self.assertEqual(prefs.last_cleanup_preset, "clean_logo")
+
 
 if __name__ == "__main__":
     unittest.main()

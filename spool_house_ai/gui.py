@@ -52,7 +52,7 @@ from spool_house_ai.app_identity import (
     load_app_version,
     set_windows_app_user_model_id,
 )
-from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config
+from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config, normalize_cleanup_preset
 from spool_house_ai.logging_setup import configure_logging
 from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths, build_job_output_paths_for_stem
 from spool_house_ai.pipeline import ImagePipeline
@@ -77,12 +77,21 @@ ROOMS = [
 
 PRESET_DESCRIPTIONS = {
     "default": "Balanced cleanup for mixed artwork. Keeps likely intentional nearby detail.",
-    "logo_clean": "Best for simple logos and wall art with unwanted floating specks.",
-    "clean_logo": "Clean, bold marks and text logos with fewer detached artifacts.",
+    "clean_logo": "Best for clean logos, bold marks, text logos, and wall art with unwanted floating specks.",
+    "detail_preserving": "Keeps more small detached detail for artwork where tiny pieces matter.",
     "drip_logo": "Preserves nearby drips and drops while removing far-away specks.",
     "splatter_logo": "Keeps rough logo texture and near-body splatter detail.",
-    "detail_preserving": "Keeps more small detached detail for artwork where tiny pieces matter.",
+    "line_art": "For sneaker outlines, coloring-page art, tattoo flash, and clean interior linework.",
 }
+
+VISIBLE_CLEANUP_PRESETS = [
+    ("Default", "default"),
+    ("Clean Logo", "clean_logo"),
+    ("Detail Preserving", "detail_preserving"),
+    ("Drip / Graffiti", "drip_logo"),
+    ("Splatter / Rough", "splatter_logo"),
+    ("Line Art", "line_art"),
+]
 
 ACCENT_STYLES = {
     "purple": ("#A855F7", "#7E22CE", "#C084FC"),
@@ -819,20 +828,10 @@ class MainWindow(QMainWindow):
             ],
             self.config.stl.detail_mode,
         )
-        initial_preset = self.config.silhouette.cleanup_preset
+        initial_preset = normalize_cleanup_preset(self.config.silhouette.cleanup_preset)
         if self.ui_preferences.use_last_selected_preset and self.ui_preferences.last_cleanup_preset:
-            initial_preset = self.ui_preferences.last_cleanup_preset
-        self.cleanup_preset = self._combo(
-            [
-                ("Default", "default"),
-                ("Logo Clean", "logo_clean"),
-                ("Clean Logo", "clean_logo"),
-                ("Drip Logo", "drip_logo"),
-                ("Splatter Logo", "splatter_logo"),
-                ("Detail Preserving", "detail_preserving"),
-            ],
-            initial_preset,
-        )
+            initial_preset = normalize_cleanup_preset(self.ui_preferences.last_cleanup_preset)
+        self.cleanup_preset = self._combo(VISIBLE_CLEANUP_PRESETS, initial_preset)
         self.cleanup_preset.currentIndexChanged.connect(self._cleanup_preset_changed)
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
         self.base_height = self._double_spin(0.2, 10.0, self.config.stl.base_height_mm)

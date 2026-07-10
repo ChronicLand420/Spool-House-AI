@@ -264,31 +264,47 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertGreater(int(analysis.final_mask.sum()), 500)
             self.assertGreaterEqual(len(analysis.vector_contours), 1)
 
-    def test_logo_clean_preset_uses_stronger_island_cleanup(self) -> None:
+    def test_clean_logo_preset_uses_stronger_island_cleanup(self) -> None:
         logo_config = apply_cleanup_preset(
             replace(
                 self.silhouette_config,
-                cleanup_preset="logo_clean",
+                cleanup_preset="clean_logo",
                 min_island_area_px=20,
                 preserve_islands_near_body=True,
                 island_near_body_distance_px=8,
             )
         )
 
-        self.assertEqual(logo_config.cleanup_preset, "logo_clean")
+        self.assertEqual(logo_config.cleanup_preset, "clean_logo")
         self.assertTrue(logo_config.remove_small_islands)
         self.assertGreaterEqual(logo_config.min_island_area_px, 150)
         self.assertFalse(logo_config.preserve_islands_near_body)
         self.assertEqual(logo_config.island_near_body_distance_px, 0)
 
+    def test_legacy_logo_clean_alias_maps_to_clean_logo(self) -> None:
+        logo_config = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="logo_clean"))
+
+        self.assertEqual(logo_config.cleanup_preset, "clean_logo")
+        self.assertGreaterEqual(logo_config.min_island_area_px, 150)
+        self.assertFalse(logo_config.preserve_islands_near_body)
+
     def test_phase_10_logo_presets_have_distinct_cleanup_profiles(self) -> None:
         clean_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="clean_logo"))
         drip_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="drip_logo"))
         splatter_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="splatter_logo"))
+        line_art = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="line_art"))
 
         self.assertEqual(clean_logo.cleanup_preset, "clean_logo")
         self.assertGreaterEqual(clean_logo.min_island_area_px, 150)
         self.assertFalse(clean_logo.preserve_islands_near_body)
+
+        self.assertEqual(line_art.cleanup_preset, "line_art")
+        self.assertGreater(line_art.min_island_area_px, 35)
+        self.assertLess(line_art.min_island_area_px, clean_logo.min_island_area_px)
+        self.assertTrue(line_art.preserve_islands_near_body)
+        self.assertGreaterEqual(line_art.island_near_body_distance_px, 4)
+        self.assertLessEqual(line_art.island_near_body_distance_px, 6)
+        self.assertTrue(line_art.preserve_internal_details)
 
         self.assertEqual(drip_logo.cleanup_preset, "drip_logo")
         self.assertTrue(drip_logo.preserve_islands_near_body)

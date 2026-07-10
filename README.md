@@ -322,16 +322,16 @@ stl:
 
 ## Cleanup Presets / Artifact Reporting
 
-The GUI exposes cleanup presets in the Cleanup / Vector settings:
+The GUI exposes cleanup presets in the Presets panel:
 
-- `default`: keeps the existing balanced behavior and preserves nearby small islands when they may be intentional details.
-- `logo_clean`: removes tiny isolated dot artifacts more aggressively for simple logos, wall art, and Nike/Mopar-style artwork.
-- `clean_logo`: a plain-language logo cleanup preset for clean marks, text logos, and bold wall art.
+- `default`: balanced behavior for mixed artwork; preserves nearby small islands when they may be intentional details.
+- `clean_logo`: removes tiny isolated dot artifacts more aggressively for simple logos, wall art, Nike/Mopar-style artwork, clean marks, and bold text logos.
+- `detail_preserving`: keeps more small detached or near-body detail for artwork where tiny pieces may matter.
 - `drip_logo`: removes far-away specks while preserving nearby drips, drops, and small detached logo pieces.
 - `splatter_logo`: preserves rough/splatter edges and near-body texture while still removing tiny isolated junk.
-- `detail_preserving`: keeps more small detached or near-body detail than `logo_clean` for artwork where tiny pieces may matter.
+- `line_art`: preserves long outline strokes, sneaker panels, coloring-page lines, tattoo-flash outlines, and clean interior linework while reducing far-away specks.
 
-Use `logo_clean` or `clean_logo` when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use `drip_logo` for drip/graffiti marks where nearby drops are part of the design. Use `splatter_logo` for distressed or rough logos where edge texture matters. Avoid aggressive logo cleanup when detached dots are part of the design, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
+Use Clean Logo when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use Line Art for sneaker outlines, coloring-page drawings, tattoo-flash style artwork, technical outlines, and artwork where interior strokes matter. Use Drip / Graffiti for drip marks where nearby drops are part of the design. Use Splatter / Rough for distressed or rough logos where edge texture matters. Avoid aggressive cleanup when detached dots are intentional details, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
 
 Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export. `job_summary.md` is a short human-readable package summary for slicer/product review.
 

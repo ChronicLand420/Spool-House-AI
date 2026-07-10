@@ -5,12 +5,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from spool_house_ai.config import normalize_cleanup_preset
+
 
 THEMES = {"dark", "light"}
 ACCENT_COLORS = {"purple", "green", "orange", "blue", "red", "pink", "gray"}
 UI_DENSITIES = {"comfortable", "compact"}
 PREVIEW_SIZES = {"small", "medium", "large"}
 LOG_BEHAVIORS = {"collapsed", "expanded"}
+LAST_PRESET_VALUES = {"default", "clean_logo", "detail_preserving", "drip_logo", "splatter_logo", "line_art"}
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,7 @@ def ui_preferences_from_mapping(raw: dict[str, Any]) -> UiPreferences:
             defaults.show_job_summary_after_generation,
         ),
         use_last_selected_preset=_bool(raw.get("use_last_selected_preset"), defaults.use_last_selected_preset),
-        last_cleanup_preset=_text(raw.get("last_cleanup_preset"), defaults.last_cleanup_preset),
+        last_cleanup_preset=_cleanup_preset(raw.get("last_cleanup_preset"), defaults.last_cleanup_preset),
         output_folder=_text(raw.get("output_folder"), defaults.output_folder),
     )
 
@@ -89,4 +92,13 @@ def _bool(value: Any, fallback: bool) -> bool:
 def _text(value: Any, fallback: str) -> str:
     if isinstance(value, str):
         return value
+    return fallback
+
+
+def _cleanup_preset(value: Any, fallback: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    normalized = normalize_cleanup_preset(value)
+    if normalized in LAST_PRESET_VALUES:
+        return normalized
     return fallback

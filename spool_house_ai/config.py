@@ -279,11 +279,11 @@ def _silhouette_config(value: dict[str, Any]) -> SilhouetteConfig:
 
 
 def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) -> SilhouetteConfig:
-    cleanup_preset = _normalize_cleanup_preset(preset or config.cleanup_preset)
+    cleanup_preset = normalize_cleanup_preset(preset or config.cleanup_preset)
     config = replace(config, cleanup_preset=cleanup_preset)
     if cleanup_preset == "default":
         return config
-    if cleanup_preset in {"logo_clean", "clean_logo"}:
+    if cleanup_preset == "clean_logo":
         return replace(
             config,
             remove_small_islands=True,
@@ -292,6 +292,24 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
             island_near_body_distance_px=0.0,
             preserve_holes=True,
             preserve_internal_details=True,
+            morphology_enabled=True,
+            morph_kernel_size=max(config.morph_kernel_size, 3),
+            morph_iterations=max(config.morph_iterations, 1),
+            contour_smoothing_enabled=True,
+            straight_line_cleanup_enabled=True,
+            curve_fit_enabled=True,
+        )
+    if cleanup_preset == "line_art":
+        return replace(
+            config,
+            remove_small_islands=True,
+            min_island_area_px=max(config.min_island_area_px, 85.0),
+            preserve_islands_near_body=True,
+            island_near_body_distance_px=min(max(config.island_near_body_distance_px, 4.0), 6.0),
+            preserve_holes=True,
+            preserve_internal_details=True,
+            min_contour_area=min(config.min_contour_area, 18.0),
+            simplify_tolerance=min(config.simplify_tolerance, 0.7),
             morphology_enabled=True,
             morph_kernel_size=max(config.morph_kernel_size, 3),
             morph_iterations=max(config.morph_iterations, 1),
@@ -342,12 +360,14 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
     return config
 
 
-def _normalize_cleanup_preset(value: str | None) -> str:
+def normalize_cleanup_preset(value: str | None) -> str:
     normalized = str(value or "default").strip().lower().replace(" ", "_").replace("-", "_")
     if normalized in {"logo", "logo_clean", "logo_cleaning"}:
-        return "logo_clean"
+        return "clean_logo"
     if normalized in {"clean_logo", "clean"}:
         return "clean_logo"
+    if normalized in {"line", "line_art", "lineart", "outline", "outline_art", "coloring_page", "sneaker"}:
+        return "line_art"
     if normalized in {"drip", "drip_logo", "graffiti", "graffiti_logo"}:
         return "drip_logo"
     if normalized in {"splatter", "splatter_logo", "rough", "rough_logo", "distressed"}:
