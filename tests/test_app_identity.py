@@ -10,14 +10,18 @@ from unittest.mock import patch
 from spool_house_ai import __version__
 from spool_house_ai.app_identity import (
     APP_DISPLAY_NAME,
+    APP_ICON_RELATIVE_PATH,
+    APP_LOGO_GUI_RELATIVE_PATH,
     APP_USER_MODEL_ID,
     CONFIG_RELATIVE_PATH,
+    app_logo_gui_path,
     app_icon_path,
     config_path,
     load_app_version,
     resource_path,
     set_windows_app_user_model_id,
 )
+from scripts.create_desktop_shortcut import _existing_icon
 
 
 class AppIdentityTests(unittest.TestCase):
@@ -25,6 +29,19 @@ class AppIdentityTests(unittest.TestCase):
         self.assertTrue(config_path().exists())
         self.assertTrue(app_icon_path().exists())
         self.assertEqual(app_icon_path().suffix.lower(), ".ico")
+        self.assertTrue(app_logo_gui_path().exists())
+        self.assertEqual(app_logo_gui_path().suffix.lower(), ".png")
+
+    def test_branding_asset_paths_use_spool_house_branding(self) -> None:
+        self.assertEqual(APP_ICON_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_icon.ico")
+        self.assertEqual(APP_LOGO_GUI_RELATIVE_PATH.as_posix(), "assets/branding/spool_house_logo_gui.png")
+        self.assertTrue((Path.cwd() / "assets" / "branding" / "spool_house_logo_source.png").exists())
+
+    def test_shortcut_helper_prefers_branded_icon(self) -> None:
+        self.assertEqual(
+            _existing_icon(Path.cwd()),
+            Path.cwd() / "assets" / "branding" / "spool_house_icon.ico",
+        )
 
     def test_display_identity_values_are_release_ready(self) -> None:
         self.assertEqual(APP_DISPLAY_NAME, "Spool House Studio")

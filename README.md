@@ -34,7 +34,7 @@ Create a Windows desktop shortcut for the GUI:
 python scripts/create_desktop_shortcut.py
 ```
 
-This creates `Spool House Studio` on the current user's Desktop and points it at this repository with the repo root as the working directory. The source app also sets the same purple SPAI icon for the running window/taskbar when launched with `python -m spool_house_ai.gui`.
+This creates `Spool House Studio` on the current user's Desktop and points it at this repository with the repo root as the working directory. The source app also sets the Spool House icon for the running window/taskbar when launched with `python -m spool_house_ai.gui`.
 
 The app supports:
 
@@ -48,7 +48,20 @@ The app supports:
 - Use `Output Vault` and `Production Review` to inspect generated files and preview thumbnails.
 - Open the output folder, STL, SVG, or preview after generation.
 
-The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, and optional post-generation actions. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
+The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, and optional post-generation actions. The Spool House Orange accent uses the official logo orange while keeping the internal preference value `orange` for compatibility. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
+
+## Branding Assets
+
+Spool House Studio keeps the official source logo separate from generated app assets:
+
+```text
+assets/branding/spool_house_logo_source.png
+assets/branding/spool_house_logo_gui.png
+assets/branding/spool_house_icon.png
+assets/branding/spool_house_icon.ico
+```
+
+The full logo is used in the GUI header and Settings/About area. The simplified icon is used for the source app window/taskbar, desktop shortcut, and portable EXE build.
 
 The visual theme is an original underground maker bunker/factory interface. It does not use Fallout Shelter assets, names, characters, or copied art.
 
@@ -173,7 +186,7 @@ By default, the build helper writes to a temp review folder:
 %TEMP%\shai_spool_house_studio_build\dist\Spool House Studio\
 ```
 
-The helper creates a one-folder portable app, copies `assets/`, copies `config/config.yaml`, creates `input/`, `output/`, and `logs/`, and uses `assets/spai_icon_purple.ico` for the EXE icon. Do not commit `build/`, `dist/`, `release/`, generated EXE files, local outputs, logs, or `config/ui_preferences.json`.
+The helper creates a one-folder portable app, copies `assets/`, copies `config/config.yaml`, creates `input/`, `output/`, and `logs/`, and uses `assets/branding/spool_house_icon.ico` for the EXE icon. Do not commit `build/`, `dist/`, `release/`, generated EXE files, local outputs, logs, or `config/ui_preferences.json`.
 
 To inspect the PyInstaller command without building:
 

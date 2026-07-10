@@ -47,6 +47,7 @@ def _python_launcher(repo_root: Path) -> Path:
 
 def _existing_icon(repo_root: Path) -> Path | None:
     for relative_path in (
+        "assets/branding/spool_house_icon.ico",
         "assets/spai_icon_purple.ico",
         "assets/spool_house_ai.ico",
         "assets/icon.ico",

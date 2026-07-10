@@ -47,6 +47,7 @@ except ModuleNotFoundError as error:
 from spool_house_ai.app_identity import (
     APP_DISPLAY_NAME,
     APP_ORGANIZATION_NAME,
+    app_logo_gui_path,
     app_icon_path,
     config_path,
     load_app_version,
@@ -96,12 +97,22 @@ VISIBLE_CLEANUP_PRESETS = [
 ACCENT_STYLES = {
     "purple": ("#A855F7", "#7E22CE", "#C084FC"),
     "green": ("#22C55E", "#15803D", "#86EFAC"),
-    "orange": ("#F97316", "#C2410C", "#FDBA74"),
+    "orange": ("#EC4202", "#B83205", "#FF6A1A"),
     "blue": ("#3B82F6", "#1D4ED8", "#93C5FD"),
     "red": ("#EF4444", "#B91C1C", "#FCA5A5"),
     "pink": ("#EC4899", "#BE185D", "#F9A8D4"),
     "gray": ("#9CA3AF", "#4B5563", "#D1D5DB"),
 }
+
+ACCENT_COLOR_OPTIONS = [
+    ("Spool Purple", "purple"),
+    ("Neon Green", "green"),
+    ("Spool House Orange", "orange"),
+    ("Blue", "blue"),
+    ("Red", "red"),
+    ("Pink", "pink"),
+    ("Neutral Gray", "gray"),
+]
 
 ACCENT_TEXT_COLORS = {
     "blue": "#f8fafc",
@@ -119,6 +130,22 @@ PREVIEW_SIZES = {
 def _elide_text(widget: QWidget, text: str, reserve_px: int = 24) -> str:
     width = max(80, widget.width() - reserve_px)
     return QFontMetrics(widget.font()).elidedText(text, Qt.ElideMiddle, width)
+
+
+def _brand_logo_label(width: int, height: int) -> QLabel:
+    label = QLabel()
+    label.setObjectName("brandLogo")
+    label.setFixedSize(width, height)
+    label.setAlignment(Qt.AlignCenter)
+    label.setToolTip("Spool House Studio")
+    logo_path = app_logo_gui_path()
+    if logo_path.exists():
+        pixmap = QPixmap(str(logo_path))
+        if not pixmap.isNull():
+            label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            return label
+    label.setText("Spool\nHouse")
+    return label
 
 
 class GuiLogHandler(logging.Handler):
@@ -264,26 +291,23 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
+        header_row = QHBoxLayout()
+        header_text = QVBoxLayout()
+        header_text.setContentsMargins(0, 0, 0, 0)
+        header_text.setSpacing(4)
         title = QLabel("Settings")
         title.setObjectName("dialogTitle")
         intro = QLabel("Customize the app shell without changing production pipeline settings.")
         intro.setObjectName("mutedText")
         intro.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(intro)
+        header_text.addWidget(title)
+        header_text.addWidget(intro)
+        header_row.addLayout(header_text, 1)
+        header_row.addWidget(_brand_logo_label(92, 92), 0, Qt.AlignTop)
+        layout.addLayout(header_row)
 
         self.theme_combo = self._combo([("Dark", "dark"), ("Light", "light")])
-        self.accent_combo = self._combo(
-            [
-                ("Spool Purple", "purple"),
-                ("Neon Green", "green"),
-                ("Fire Orange", "orange"),
-                ("Blue", "blue"),
-                ("Red", "red"),
-                ("Pink", "pink"),
-                ("Neutral Gray", "gray"),
-            ]
-        )
+        self.accent_combo = self._combo(ACCENT_COLOR_OPTIONS)
         self.density_combo = self._combo([("Comfortable", "comfortable"), ("Compact", "compact")])
         self.preview_combo = self._combo([("Small", "small"), ("Medium", "medium"), ("Large", "large")])
         self.log_combo = self._combo([("Collapsed", "collapsed"), ("Expanded", "expanded")])
@@ -340,6 +364,8 @@ class SettingsDialog(QDialog):
         about = QGroupBox("About / Quick Help")
         about.setObjectName("settingsGroup")
         about_layout = QVBoxLayout(about)
+        about_header = QHBoxLayout()
+        about_header.addWidget(_brand_logo_label(112, 112), 0, Qt.AlignTop)
         about_text = QLabel(
             f"Spool House Studio {version or ''}\n"
             "Built by ChronicLand420\n\n"
@@ -348,7 +374,8 @@ class SettingsDialog(QDialog):
         )
         about_text.setWordWrap(True)
         about_text.setObjectName("mutedText")
-        about_layout.addWidget(about_text)
+        about_header.addWidget(about_text, 1)
+        about_layout.addLayout(about_header)
         layout.addWidget(about)
 
         button_row = QHBoxLayout()
@@ -539,6 +566,7 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(16, 12, 16, 12)
         header_layout.setSpacing(12)
+        header_layout.addWidget(_brand_logo_label(104, 104), 0, Qt.AlignVCenter)
         brand_layout = QVBoxLayout()
         brand_layout.setContentsMargins(0, 0, 0, 0)
         brand_layout.setSpacing(3)
@@ -1647,6 +1675,7 @@ class MainWindow(QMainWindow):
             QWidget { background: __BG__; color: __TEXT__; font-family: Segoe UI; font-size: __FONT_SIZE__; }
             QLabel { background: transparent; }
             #appHeader { background: __PANEL__; border: 1px solid __BORDER__; border-radius: 10px; }
+            #brandLogo { background: transparent; border: 0; }
             #appTitle { font-size: 27px; font-weight: 800; color: __ACCENT__; padding: 0; }
             #appSubtitle { color: __MUTED__; padding: 0; }
             #creatorCredit { color: __MUTED_2__; font-size: 9pt; padding: 0; }

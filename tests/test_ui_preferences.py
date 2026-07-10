@@ -83,6 +83,10 @@ class UiPreferencesTests(unittest.TestCase):
         prefs = ui_preferences_from_mapping({"last_cleanup_preset": "logo_clean"})
         self.assertEqual(prefs.last_cleanup_preset, "clean_logo")
 
+    def test_legacy_orange_accent_value_still_loads(self) -> None:
+        prefs = ui_preferences_from_mapping({"accent_color": "orange"})
+        self.assertEqual(prefs.accent_color, "orange")
+
 
 if __name__ == "__main__":
     unittest.main()

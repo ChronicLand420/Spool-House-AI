@@ -4,7 +4,7 @@ import unittest
 
 from scripts.run_quality_matrix import PRESETS
 from spool_house_ai.config import normalize_cleanup_preset
-from spool_house_ai.gui import VISIBLE_CLEANUP_PRESETS
+from spool_house_ai.gui import ACCENT_COLOR_OPTIONS, VISIBLE_CLEANUP_PRESETS
 
 
 class CleanupPresetListTests(unittest.TestCase):
@@ -40,6 +40,11 @@ class CleanupPresetListTests(unittest.TestCase):
         self.assertEqual(normalize_cleanup_preset("Line Art"), "line_art")
         self.assertEqual(normalize_cleanup_preset("sneaker"), "line_art")
         self.assertEqual(normalize_cleanup_preset("not-a-real-preset"), "default")
+
+    def test_orange_accent_uses_spool_house_label_with_legacy_value(self) -> None:
+        self.assertIn(("Spool House Orange", "orange"), ACCENT_COLOR_OPTIONS)
+        labels = [label for label, _value in ACCENT_COLOR_OPTIONS]
+        self.assertNotIn("Fire Orange", labels)
 
 
 if __name__ == "__main__":

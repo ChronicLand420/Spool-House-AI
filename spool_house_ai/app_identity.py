@@ -8,7 +8,8 @@ from pathlib import Path
 APP_DISPLAY_NAME = "Spool House Studio"
 APP_ORGANIZATION_NAME = "ChronicLand420"
 APP_USER_MODEL_ID = "ChronicLand420.SpoolHouseStudio"
-APP_ICON_RELATIVE_PATH = Path("assets") / "spai_icon_purple.ico"
+APP_ICON_RELATIVE_PATH = Path("assets") / "branding" / "spool_house_icon.ico"
+APP_LOGO_GUI_RELATIVE_PATH = Path("assets") / "branding" / "spool_house_logo_gui.png"
 CONFIG_RELATIVE_PATH = Path("config") / "config.yaml"
 
 
@@ -48,6 +49,10 @@ def config_path() -> Path:
 
 def app_icon_path() -> Path:
     return resource_path(APP_ICON_RELATIVE_PATH)
+
+
+def app_logo_gui_path() -> Path:
+    return resource_path(APP_LOGO_GUI_RELATIVE_PATH)
 
 
 def load_app_version() -> str:
