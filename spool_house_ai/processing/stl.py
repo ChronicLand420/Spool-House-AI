@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 import trimesh
+from PIL import Image
 
 from spool_house_ai.config import StlConfig
 from spool_house_ai.processing.analysis import ImageAnalysis
@@ -45,6 +47,8 @@ class StlCreationResult:
 
 def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> StlCreationResult:
     """Create a simple raised relief STL from a binary silhouette mask."""
+    if config.product_mode == "lithophane":
+        raise ValueError("Lithophane uses create_lithophane_stl instead of the relief STL pipeline.")
     if config.stl_backend in {"auto_vector_first", "vector_extrusion"}:
         try:
             _create_vector_extrusion_stl(analysis, output_path, config)
@@ -81,6 +85,77 @@ def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, c
         fallback_used=False,
         fallback_reason="",
     )
+
+
+def create_lithophane_stl(
+    image_path: Path,
+    output_path: Path,
+    config: StlConfig,
+    *,
+    preview_path: Path | None = None,
+    cleaned_png_path: Path | None = None,
+    silhouette_png_path: Path | None = None,
+) -> tuple[StlCreationResult, dict[str, Any]]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image, metadata = _load_lithophane_image(image_path, config.lithophane_max_pixels)
+    brightness = np.asarray(image, dtype=np.float32) / 255.0
+    thickness = lithophane_thickness_from_brightness(
+        brightness,
+        min_thickness_mm=config.lithophane_min_thickness_mm,
+        max_thickness_mm=config.lithophane_max_thickness_mm,
+        invert=config.lithophane_invert,
+    )
+    mesh, bounds_metadata = _lithophane_mesh_from_thickness(thickness, config.lithophane_width_mm)
+    mesh.export(output_path)
+
+    if cleaned_png_path is not None:
+        cleaned_png_path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(cleaned_png_path)
+    if preview_path is not None:
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        _save_lithophane_preview(thickness, preview_path)
+    if silhouette_png_path is not None:
+        silhouette_png_path.parent.mkdir(parents=True, exist_ok=True)
+        _save_lithophane_preview(thickness, silhouette_png_path)
+
+    metadata.update(bounds_metadata)
+    metadata.update(
+        {
+            "backend": "lithophane_heightfield",
+            "mapping": "bright_thin_dark_thick" if not config.lithophane_invert else "bright_thick_dark_thin",
+            "invert": config.lithophane_invert,
+            "min_thickness_mm": config.lithophane_min_thickness_mm,
+            "max_thickness_mm": config.lithophane_max_thickness_mm,
+            "actual_min_thickness_mm": round(float(np.min(thickness)), 4),
+            "actual_max_thickness_mm": round(float(np.max(thickness)), 4),
+            "cleanup_presets_ignored": True,
+        }
+    )
+    return (
+        StlCreationResult(
+            requested_backend="lithophane_heightfield",
+            actual_backend="lithophane_heightfield",
+            fallback_used=False,
+            fallback_reason="",
+        ),
+        metadata,
+    )
+
+
+def lithophane_thickness_from_brightness(
+    brightness: np.ndarray,
+    *,
+    min_thickness_mm: float,
+    max_thickness_mm: float,
+    invert: bool = False,
+) -> np.ndarray:
+    if max_thickness_mm <= min_thickness_mm:
+        raise ValueError("Lithophane max thickness must be greater than min thickness.")
+    normalized = np.clip(brightness.astype(np.float32), 0.0, 1.0)
+    thickness_range = max_thickness_mm - min_thickness_mm
+    if invert:
+        return min_thickness_mm + normalized * thickness_range
+    return max_thickness_mm - normalized * thickness_range
 
 
 def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
@@ -512,6 +587,108 @@ def _resize_for_mesh(mask: np.ndarray, max_pixels: int) -> np.ndarray:
         interpolation=cv2.INTER_AREA,
     )
     return resized > 0
+
+
+def _load_lithophane_image(image_path: Path, max_pixels: int) -> tuple[Image.Image, dict[str, Any]]:
+    image = Image.open(image_path).convert("L")
+    original_width, original_height = image.size
+    current_pixels = original_width * original_height
+    sampled_width, sampled_height = original_width, original_height
+    downscaled = False
+    if current_pixels > max_pixels:
+        scale = (max_pixels / current_pixels) ** 0.5
+        sampled_width = max(2, int(original_width * scale))
+        sampled_height = max(2, int(original_height * scale))
+        image = image.resize((sampled_width, sampled_height), Image.Resampling.LANCZOS)
+        downscaled = True
+    return image, {
+        "original_width_px": original_width,
+        "original_height_px": original_height,
+        "sampled_width_px": sampled_width,
+        "sampled_height_px": sampled_height,
+        "sampled_pixel_count": sampled_width * sampled_height,
+        "max_pixels": max_pixels,
+        "source_downscaled": downscaled,
+    }
+
+
+def _lithophane_mesh_from_thickness(thickness: np.ndarray, width_mm: float) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+    height_px, width_px = thickness.shape
+    if height_px < 1 or width_px < 1:
+        raise ValueError("Lithophane image did not contain pixels.")
+    if width_mm <= 0:
+        raise ValueError("Lithophane width must be greater than zero.")
+
+    height_mm = width_mm * (height_px / width_px)
+    scale_x = width_mm / width_px
+    scale_y = height_mm / height_px
+
+    vertices: list[tuple[float, float, float]] = []
+    top_indices = np.zeros((height_px + 1, width_px + 1), dtype=np.int64)
+    bottom_indices = np.zeros((height_px + 1, width_px + 1), dtype=np.int64)
+    min_thickness = float(np.min(thickness))
+
+    for y in range(height_px + 1):
+        for x in range(width_px + 1):
+            px = x * scale_x
+            py = height_mm - (y * scale_y)
+            top_z = _lithophane_vertex_height(thickness, y, x, min_thickness)
+            top_indices[y, x] = len(vertices)
+            vertices.append((px, py, top_z))
+            bottom_indices[y, x] = len(vertices)
+            vertices.append((px, py, 0.0))
+
+    faces: list[tuple[int, int, int]] = []
+    for y in range(height_px):
+        for x in range(width_px):
+            top_a = top_indices[y, x]
+            top_b = top_indices[y, x + 1]
+            top_c = top_indices[y + 1, x + 1]
+            top_d = top_indices[y + 1, x]
+            bottom_a = bottom_indices[y, x]
+            bottom_b = bottom_indices[y, x + 1]
+            bottom_c = bottom_indices[y + 1, x + 1]
+            bottom_d = bottom_indices[y + 1, x]
+
+            faces.extend([(top_a, top_d, top_c), (top_a, top_c, top_b)])
+            faces.extend([(bottom_a, bottom_b, bottom_c), (bottom_a, bottom_c, bottom_d)])
+            if y == 0:
+                faces.extend([(top_a, top_b, bottom_b), (top_a, bottom_b, bottom_a)])
+            if y == height_px - 1:
+                faces.extend([(top_d, bottom_d, bottom_c), (top_d, bottom_c, top_c)])
+            if x == 0:
+                faces.extend([(top_a, bottom_a, bottom_d), (top_a, bottom_d, top_d)])
+            if x == width_px - 1:
+                faces.extend([(top_b, top_c, bottom_c), (top_b, bottom_c, bottom_b)])
+
+    mesh = trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=True)
+    return mesh, {
+        "width_mm": round(float(width_mm), 4),
+        "height_mm": round(float(height_mm), 4),
+        "scale_x_mm_per_pixel": round(float(scale_x), 6),
+        "scale_y_mm_per_pixel": round(float(scale_y), 6),
+    }
+
+
+def _lithophane_vertex_height(thickness: np.ndarray, y: int, x: int, fallback: float) -> float:
+    samples: list[float] = []
+    for sample_y in (y - 1, y):
+        for sample_x in (x - 1, x):
+            if 0 <= sample_y < thickness.shape[0] and 0 <= sample_x < thickness.shape[1]:
+                samples.append(float(thickness[sample_y, sample_x]))
+    if not samples:
+        return fallback
+    return float(sum(samples) / len(samples))
+
+
+def _save_lithophane_preview(thickness: np.ndarray, output_path: Path) -> None:
+    min_value = float(np.min(thickness))
+    max_value = float(np.max(thickness))
+    if max_value <= min_value:
+        preview = np.zeros(thickness.shape, dtype=np.uint8)
+    else:
+        preview = ((thickness - min_value) / (max_value - min_value) * 255.0).astype(np.uint8)
+    Image.fromarray(preview, mode="L").save(output_path)
 
 
 def _resolve_diagonal_contacts(mask: np.ndarray) -> np.ndarray:

@@ -116,6 +116,11 @@ class StlConfig:
     bevel_enabled: bool
     bevel_pixels: int
     curve_sample_resolution: int
+    lithophane_width_mm: float
+    lithophane_min_thickness_mm: float
+    lithophane_max_thickness_mm: float
+    lithophane_invert: bool
+    lithophane_max_pixels: int
 
 
 @dataclass(frozen=True)
@@ -424,6 +429,11 @@ def _stl_config(value: dict[str, Any]) -> StlConfig:
         bevel_enabled=bool(value.get("bevel_enabled", False)),
         bevel_pixels=int(value.get("bevel_pixels", 1)),
         curve_sample_resolution=int(value.get("curve_sample_resolution", 2)),
+        lithophane_width_mm=float(value.get("lithophane_width_mm", 100.0)),
+        lithophane_min_thickness_mm=float(value.get("lithophane_min_thickness_mm", 0.8)),
+        lithophane_max_thickness_mm=float(value.get("lithophane_max_thickness_mm", 3.0)),
+        lithophane_invert=bool(value.get("lithophane_invert", False)),
+        lithophane_max_pixels=int(value.get("lithophane_max_pixels", 60000)),
     )
 
 

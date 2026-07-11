@@ -612,7 +612,10 @@ class PipelineWorker(QThread):
 
         ok = pipeline.process(self.image_path, stage_callback=on_stage)
         output_dir = build_job_output_paths(self.config.output_dir, self.image_path).job_root
-        self.finished_job.emit(ok, str(output_dir), self.image_path.stem, str(self.image_path), self.config.stl.stl_backend)
+        requested_backend = (
+            "lithophane_heightfield" if self.config.stl.product_mode == "lithophane" else self.config.stl.stl_backend
+        )
+        self.finished_job.emit(ok, str(output_dir), self.image_path.stem, str(self.image_path), requested_backend)
 
 
 class MainWindow(QMainWindow):
@@ -944,9 +947,15 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
         self.stl_backend = self._backend_combo()
         self.product_mode = self._combo(
-            [("Flat Relief", "flat_relief"), ("Keychain", "keychain"), ("Wall Art", "wall_art")],
+            [
+                ("Flat Relief", "flat_relief"),
+                ("Keychain", "keychain"),
+                ("Wall Art", "wall_art"),
+                ("Lithophane", "lithophane"),
+            ],
             self.config.stl.product_mode,
         )
+        self.product_mode.currentIndexChanged.connect(self._product_mode_changed)
         self.detail_mode = self._combo(
             [
                 ("Silhouette Only", "silhouette_only"),
@@ -986,6 +995,16 @@ class MainWindow(QMainWindow):
         self.keychain_hole.setChecked(self.config.stl.add_keychain_hole)
         self.keychain_diameter = self._double_spin(1.0, 20.0, self.config.stl.keychain_hole_diameter_mm)
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
+        self.lithophane_width = self._double_spin(20.0, 300.0, self.config.stl.lithophane_width_mm)
+        self.lithophane_min_thickness = self._double_spin(0.2, 10.0, self.config.stl.lithophane_min_thickness_mm)
+        self.lithophane_max_thickness = self._double_spin(0.3, 12.0, self.config.stl.lithophane_max_thickness_mm)
+        self.lithophane_max_thickness.setMinimum(self.lithophane_min_thickness.value() + 0.1)
+        self.lithophane_min_thickness.valueChanged.connect(
+            lambda value: self.lithophane_max_thickness.setMinimum(value + 0.1)
+        )
+        self.lithophane_max_pixels = self._spin(1000, 250000, self.config.stl.lithophane_max_pixels)
+        self.lithophane_invert = QCheckBox("Invert lithophane")
+        self.lithophane_invert.setChecked(self.config.stl.lithophane_invert)
 
         preset_group = self._form_group("Presets", [("Artwork style", self.cleanup_preset)])
         self.preset_help = QLabel("")
@@ -993,16 +1012,19 @@ class MainWindow(QMainWindow):
         self.preset_help.setWordWrap(True)
         preset_group.layout().addRow(self.preset_help)
         layout.addWidget(preset_group)
-        layout.addWidget(
-            self._form_group(
-                "Product Setup",
-                [
-                    ("Product", self.product_mode),
-                    ("Detail handling", self.detail_mode),
-                    ("Output size mm", self.output_scale),
-                ],
-            )
+        product_group = self._form_group(
+            "Product Setup",
+            [
+                ("Product", self.product_mode),
+                ("Detail handling", self.detail_mode),
+                ("Output size mm", self.output_scale),
+            ],
         )
+        self.lithophane_note = QLabel("Lithophane uses photo brightness for thickness. Cleanup presets are ignored.")
+        self.lithophane_note.setObjectName("presetDescription")
+        self.lithophane_note.setWordWrap(True)
+        product_group.layout().addRow(self.lithophane_note)
+        layout.addWidget(product_group)
 
         advanced_section = CollapsibleSection("Advanced Settings", expanded=False)
         self.advanced_section = advanced_section
@@ -1040,9 +1062,21 @@ class MainWindow(QMainWindow):
         keychain_group = self._form_group("Keychain", [("Hole diameter mm", self.keychain_diameter)])
         keychain_group.layout().addRow(self.keychain_hole)
         advanced_section.body_layout.addWidget(keychain_group)
+        lithophane_group = self._form_group(
+            "Lithophane",
+            [
+                ("Width mm", self.lithophane_width),
+                ("Min thickness mm", self.lithophane_min_thickness),
+                ("Max thickness mm", self.lithophane_max_thickness),
+                ("Max sampled pixels", self.lithophane_max_pixels),
+            ],
+        )
+        lithophane_group.layout().addRow(self.lithophane_invert)
+        advanced_section.body_layout.addWidget(lithophane_group)
         layout.addWidget(advanced_section)
         layout.addStretch(1)
         self._update_preset_help()
+        self._product_mode_changed()
         scroll.setWidget(panel)
         return scroll
 
@@ -1085,6 +1119,47 @@ class MainWindow(QMainWindow):
         self._save_ui_preferences()
         if self.settings_dialog:
             self.settings_dialog.last_cleanup_preset = self.ui_preferences.last_cleanup_preset
+
+    def _product_mode_changed(self) -> None:
+        if not hasattr(self, "product_mode"):
+            return
+        is_lithophane = self._combo_value(self.product_mode) == "lithophane"
+        if hasattr(self, "lithophane_note"):
+            self.lithophane_note.setVisible(is_lithophane)
+        contour_controls = [
+            getattr(self, "cleanup_preset", None),
+            getattr(self, "detail_mode", None),
+            getattr(self, "stl_backend", None),
+            getattr(self, "output_scale", None),
+            getattr(self, "threshold", None),
+            getattr(self, "smoothing", None),
+            getattr(self, "min_area", None),
+            getattr(self, "simplify", None),
+            getattr(self, "min_island_area", None),
+            getattr(self, "island_distance", None),
+            getattr(self, "detail_height", None),
+            getattr(self, "engraving_depth", None),
+            getattr(self, "preserve_holes", None),
+            getattr(self, "preserve_details", None),
+            getattr(self, "remove_islands", None),
+            getattr(self, "preserve_islands_near_body", None),
+            getattr(self, "background_removal", None),
+            getattr(self, "keychain_hole", None),
+            getattr(self, "keychain_diameter", None),
+        ]
+        lithophane_controls = [
+            getattr(self, "lithophane_width", None),
+            getattr(self, "lithophane_min_thickness", None),
+            getattr(self, "lithophane_max_thickness", None),
+            getattr(self, "lithophane_max_pixels", None),
+            getattr(self, "lithophane_invert", None),
+        ]
+        for control in contour_controls:
+            if control is not None:
+                control.setEnabled(not is_lithophane)
+        for control in lithophane_controls:
+            if control is not None:
+                control.setEnabled(is_lithophane)
 
     def open_settings(self) -> None:
         if self.settings_dialog is None:
@@ -1239,7 +1314,8 @@ class MainWindow(QMainWindow):
             return
         image_path = self.pending_jobs[self.batch_index]
         self._append_status_path("Selected input", image_path)
-        self.logs.append(f"Requested STL backend: {self._selected_stl_backend()}")
+        requested_backend = "lithophane_heightfield" if self._combo_value(self.product_mode) == "lithophane" else self._selected_stl_backend()
+        self.logs.append(f"Requested STL backend: {requested_backend}")
         self.current_stage = "Intake Room"
         self.current_stage_progress_index = 0
         self.update_runtime_status()
@@ -1314,6 +1390,11 @@ class MainWindow(QMainWindow):
             add_keychain_hole=self.keychain_hole.isChecked(),
             keychain_hole_diameter_mm=self.keychain_diameter.value(),
             output_scale_mm=self.output_scale.value(),
+            lithophane_width_mm=self.lithophane_width.value(),
+            lithophane_min_thickness_mm=self.lithophane_min_thickness.value(),
+            lithophane_max_thickness_mm=self.lithophane_max_thickness.value(),
+            lithophane_invert=self.lithophane_invert.isChecked(),
+            lithophane_max_pixels=self.lithophane_max_pixels.value(),
         )
         return replace(
             self.config,

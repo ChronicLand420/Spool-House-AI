@@ -101,6 +101,11 @@ stl:
   bevel_enabled: false
   bevel_pixels: 1
   curve_sample_resolution: 2
+  lithophane_width_mm: 100.0
+  lithophane_min_thickness_mm: 0.8
+  lithophane_max_thickness_mm: 3.0
+  lithophane_invert: false
+  lithophane_max_pixels: 60000
 
 preview:
   image_size_px: 1200

@@ -16,6 +16,7 @@ Created by ChronicLand420.
    - `flat_relief`
    - `keychain`
    - `wall_art`
+   - `lithophane` (experimental)
 8. Save cleaned PNG, silhouette PNG, SVG, STL, final preview, and stage previews.
 
 Future features such as AI image generation, Blender automation, mesh repair, dashboard, queueing, database, upload packages, and slicer integrations are intentionally not implemented yet.
@@ -235,6 +236,13 @@ python -m spool_house_ai.main --once --product-mode keychain --threshold 145 --h
 - `flat_relief`: general raised artwork relief for simple signs, emblems, and badges.
 - `keychain`: adds keychain-oriented thickness behavior and can add a configurable keyring loop/hole.
 - `wall_art`: creates a thicker display piece with stronger relief height.
+- `lithophane`: experimental flat lithophane panel that maps image brightness to plastic thickness.
+
+### Lithophane (Experimental)
+
+Lithophane mode creates a flat rectangular STL from photo brightness instead of tracing logo contours. Bright or white pixels are thinner by default, and dark pixels are thicker, so the image reads correctly when backlit. Cleanup presets, SVG tracing, detail handling, and vector/raster backend choices do not apply to lithophane jobs.
+
+This first version is intentionally simple: flat panels only, no curved lamp shades, no sockets, no stands, no color lithophanes, and no AI cleanup. It works best with clear, bright, high-contrast images. For printing, start with light-colored or white PLA and a small layer height, then verify orientation and exposure in your slicer.
 
 ## Detail Modes
 
@@ -283,6 +291,8 @@ output/example/
 
 `example.svg` is the normal editable vector output. `example_review.svg` adds visible inspection layers for foreground/body contours, holes, preserved details, and ignored islands so the artwork is easier to inspect in Inkscape before STL export.
 
+For lithophane jobs, the same job folder structure is used, but SVG files are not created because lithophane output is generated from grayscale brightness. The STL, preview, mesh report, job status, and job summary are still written under `stl/`, `previews/`, and `reports/`.
+
 The default output root is `output/`. In the GUI, use `Settings` -> `Output Folder` to choose a different root folder. New jobs still use the same per-image pattern, `<selected output root>/<input stem>/`, and then place files into the `source/`, `svg/`, `stl/`, `previews/`, and `reports/` subfolders. CLI runs continue to use `config/config.yaml` unless you change that config directly.
 
 The contour debug preview uses:
@@ -327,6 +337,11 @@ stl:
   engraving_depth_mm: 0.6
   add_keychain_hole: false
   keychain_hole_diameter_mm: 5.0
+  lithophane_width_mm: 100.0
+  lithophane_min_thickness_mm: 0.8
+  lithophane_max_thickness_mm: 3.0
+  lithophane_invert: false
+  lithophane_max_pixels: 60000
 ```
 
 `stl_backend` supports:

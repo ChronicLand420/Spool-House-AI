@@ -16,7 +16,14 @@ from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths
 from spool_house_ai.processing.analysis import analyze_image, save_mask
 from spool_house_ai.processing.background import background_removal_available, remove_background
 from spool_house_ai.processing.preview import create_preview, save_stage_previews
-from spool_house_ai.processing.stl import MeshReport, StlCreationResult, create_relief_stl, validate_stl_mesh, write_mesh_report
+from spool_house_ai.processing.stl import (
+    MeshReport,
+    StlCreationResult,
+    create_lithophane_stl,
+    create_relief_stl,
+    validate_stl_mesh,
+    write_mesh_report,
+)
 from spool_house_ai.processing.vectorize import create_svg
 
 
@@ -57,6 +64,7 @@ class ImagePipeline:
         stl_result: StlCreationResult | None = None
         mesh_report: MeshReport | None = None
         analysis = None
+        lithophane_metadata: dict[str, Any] | None = None
 
         def write_job_status() -> None:
             try:
@@ -71,7 +79,8 @@ class ImagePipeline:
                     mesh_report=mesh_report,
                     warnings=warnings,
                     failures=failures,
-                    artifact_summary=_artifact_summary(analysis),
+                    artifact_summary=_artifact_summary(analysis, self.config),
+                    lithophane_metadata=lithophane_metadata,
                     started_at=started_at,
                     finished_at=finished_at,
                     duration_seconds=duration_seconds,
@@ -92,6 +101,72 @@ class ImagePipeline:
             warnings.append(message)
             self.logger.warning(message)
         _emit(stage_callback, "Intake Room", "done", "Image accepted", image_path)
+
+        if self.config.stl.product_mode == "lithophane":
+            _emit(stage_callback, "Cleanup Lab", "done", "Cleanup skipped for lithophane", image_path)
+            _emit(stage_callback, "Detail Analyzer", "active", "Sampling grayscale brightness", image_path)
+            stl_created = False
+            try:
+                _emit(stage_callback, "Mesh Forge", "active", "Generating lithophane heightfield", image_path)
+                stl_result, lithophane_metadata = create_lithophane_stl(
+                    image_path,
+                    stl_path,
+                    self.config.stl,
+                    preview_path=preview_path,
+                    cleaned_png_path=cleaned_png_path,
+                    silhouette_png_path=silhouette_png_path,
+                )
+                if lithophane_metadata.get("source_downscaled"):
+                    message = (
+                        "Lithophane image was downscaled to "
+                        f"{lithophane_metadata.get('sampled_width_px')}x{lithophane_metadata.get('sampled_height_px')} "
+                        "pixels for mesh safety."
+                    )
+                    warnings.append(message)
+                    self.logger.warning(message)
+                _emit(stage_callback, "Detail Analyzer", "done", "Brightness map prepared", cleaned_png_path)
+                _emit(stage_callback, "Vector Workshop", "done", "SVG not applicable for lithophane", None)
+                self.logger.info("Lithophane backend used: %s", stl_result.actual_backend)
+                mesh_report = validate_stl_mesh(
+                    stl_path,
+                    requested_backend=stl_result.requested_backend,
+                    actual_backend=stl_result.actual_backend,
+                    fallback_reason=stl_result.fallback_reason,
+                )
+                write_mesh_report(mesh_report, mesh_report_path)
+                if mesh_report.failures:
+                    failures.extend(mesh_report.failures)
+                    for failure in mesh_report.failures:
+                        self.logger.error("Mesh validation failure: %s", failure)
+                    _emit(stage_callback, "Mesh Forge", "failed", f"Mesh report: {mesh_report_path}", mesh_report_path)
+                elif mesh_report.warnings:
+                    warnings.extend(mesh_report.warnings)
+                    for warning in mesh_report.warnings:
+                        self.logger.warning("Mesh validation warning: %s", warning)
+                    _emit(stage_callback, "Mesh Forge", "done", f"STL created with warnings: {mesh_report_path}", stl_path)
+                else:
+                    _emit(stage_callback, "Mesh Forge", "done", "Lithophane STL created", stl_path)
+                stl_created = not mesh_report.failures
+                _emit(stage_callback, "Render Bay", "done", "Thickness preview rendered", preview_path)
+            except (UnidentifiedImageError, OSError) as error:
+                failures.append(f"Skipped invalid lithophane image: {error}")
+                self.logger.warning("Skipped invalid lithophane image %s: %s", image_path, error)
+                _emit(stage_callback, "Mesh Forge", "failed", "Invalid lithophane image", None)
+            except Exception as error:
+                failures.append(f"Failed to generate lithophane STL: {error}")
+                self.logger.exception("Failed to generate lithophane STL for image: %s", image_path)
+                _emit(stage_callback, "Mesh Forge", "failed", "Lithophane STL generation failed", None)
+
+            _write_job_settings(settings_path, self.config)
+            write_job_status()
+            _emit(stage_callback, "Output Vault", "done", "Files saved to job folder", preview_path)
+            if stl_created:
+                self.logger.info("Created lithophane STL: %s", stl_path)
+                self.logger.info("Created mesh report: %s", mesh_report_path)
+            if preview_path.exists():
+                self.logger.info("Created preview: %s", preview_path)
+            return stl_created
+
         if not self.config.pipeline.background_removal_enabled:
             self.logger.info("Background removal is disabled; using the original image as the cleaned PNG")
         elif not background_removal_available():
@@ -279,6 +354,11 @@ def _write_job_settings(path: Path, config: AppConfig) -> None:
         f"  output_scale_mm: {config.stl.output_scale_mm}",
         f"  add_keychain_hole: {str(config.stl.add_keychain_hole).lower()}",
         f"  keychain_hole_diameter_mm: {config.stl.keychain_hole_diameter_mm}",
+        f"  lithophane_width_mm: {config.stl.lithophane_width_mm}",
+        f"  lithophane_min_thickness_mm: {config.stl.lithophane_min_thickness_mm}",
+        f"  lithophane_max_thickness_mm: {config.stl.lithophane_max_thickness_mm}",
+        f"  lithophane_invert: {str(config.stl.lithophane_invert).lower()}",
+        f"  lithophane_max_pixels: {config.stl.lithophane_max_pixels}",
         "analysis:",
         f"  threshold_value: {config.silhouette.threshold_value}",
         f"  smoothing_strength: {config.silhouette.smoothing_strength}",
@@ -332,10 +412,12 @@ def _write_job_status(
     warnings: list[str],
     failures: list[str],
     artifact_summary: dict[str, Any],
+    lithophane_metadata: dict[str, Any] | None,
     started_at: datetime,
     finished_at: datetime,
     duration_seconds: float,
 ) -> dict[str, Any]:
+    svg_applicable = config.stl.product_mode != "lithophane"
     payload = {
         "app_version": _load_app_version(config.project_root),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -359,8 +441,8 @@ def _write_job_status(
         "detail_mask_path": str(paths.detail_mask_path),
         "contour_debug_path": str(paths.contour_debug_path),
         "preview_path": str(paths.preview_path),
-        "svg_path": str(paths.svg_path),
-        "review_svg_path": str(paths.review_svg_path),
+        "svg_path": str(paths.svg_path) if svg_applicable else "",
+        "review_svg_path": str(paths.review_svg_path) if svg_applicable else "",
         "stl_path": str(paths.stl_path),
         "mesh_report_path": str(paths.mesh_report_path),
         "job_status_path": str(paths.job_status_path),
@@ -379,6 +461,11 @@ def _write_job_status(
             "detail_height_mm": config.stl.detail_height_mm,
             "engraving_depth_mm": config.stl.engraving_depth_mm,
             "keychain_hole_diameter_mm": config.stl.keychain_hole_diameter_mm,
+            "lithophane_width_mm": config.stl.lithophane_width_mm,
+            "lithophane_min_thickness_mm": config.stl.lithophane_min_thickness_mm,
+            "lithophane_max_thickness_mm": config.stl.lithophane_max_thickness_mm,
+            "lithophane_invert": config.stl.lithophane_invert,
+            "lithophane_max_pixels": config.stl.lithophane_max_pixels,
         },
         "settings_used": {
             "pipeline": asdict(config.pipeline),
@@ -389,6 +476,7 @@ def _write_job_status(
         "warnings": warnings,
         "failures": failures,
         "artifact_summary": artifact_summary,
+        "lithophane_summary": lithophane_metadata or {},
         "mesh_summary": _mesh_summary(mesh_report),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -398,6 +486,7 @@ def _write_job_status(
 def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
     mesh = status.get("mesh_summary") or {}
     artifact = status.get("artifact_summary") or {}
+    lithophane = status.get("lithophane_summary") or {}
     warnings = status.get("warnings") or []
     failures = status.get("failures") or []
     if failures:
@@ -416,7 +505,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Input: `{status.get('input_file_path', '')}`",
         f"- Output root: `{status.get('output_root_path', '')}`",
         f"- Output folder: `{status.get('output_folder_path', '')}`",
-        f"- Cleanup preset: `{(status.get('settings_used') or {}).get('silhouette', {}).get('cleanup_preset', '')}`",
+        f"- Cleanup preset: `{artifact.get('cleanup_preset') or (status.get('settings_used') or {}).get('silhouette', {}).get('cleanup_preset', '')}`",
         f"- Product mode: `{status.get('product_mode', '')}`",
         f"- Detail mode: `{status.get('detail_mode', '')}`",
         f"- Duration: `{status.get('duration_seconds', 0)}` seconds",
@@ -453,11 +542,32 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Preserved islands: `{artifact.get('preserved_island_count', 0)}`",
         f"- Preserved details: `{artifact.get('preserved_detail_count', 0)}`",
         "",
+    ]
+    if lithophane:
+        lines.extend(
+            [
+                "## Lithophane",
+                f"- Mapping: `{lithophane.get('mapping', '')}`",
+                f"- Invert: `{lithophane.get('invert', False)}`",
+                f"- Width mm: `{lithophane.get('width_mm', '')}`",
+                f"- Height mm: `{lithophane.get('height_mm', '')}`",
+                f"- Min thickness mm: `{lithophane.get('min_thickness_mm', '')}`",
+                f"- Max thickness mm: `{lithophane.get('max_thickness_mm', '')}`",
+                f"- Actual min thickness mm: `{lithophane.get('actual_min_thickness_mm', '')}`",
+                f"- Actual max thickness mm: `{lithophane.get('actual_max_thickness_mm', '')}`",
+                f"- Sampled pixels: `{lithophane.get('sampled_width_px', '')}x{lithophane.get('sampled_height_px', '')}`",
+                f"- Downscaled: `{lithophane.get('source_downscaled', False)}`",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         "## Review",
         f"- Warnings: `{len(warnings)}`",
         f"- Failures: `{len(failures)}`",
         f"- Recommended next step: {next_step}",
-    ]
+        ]
+    )
     if warnings:
         lines.extend(["", "### Warnings"])
         lines.extend(f"- {warning}" for warning in warnings)
@@ -467,7 +577,16 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _artifact_summary(analysis: Any | None) -> dict[str, Any]:
+def _artifact_summary(analysis: Any | None, config: AppConfig) -> dict[str, Any]:
+    if config.stl.product_mode == "lithophane":
+        return {
+            "cleanup_preset": "not_applicable",
+            "cleanup_presets_ignored": True,
+            "isolated_island_count": 0,
+            "removed_island_count": 0,
+            "preserved_island_count": 0,
+            "preserved_detail_count": 0,
+        }
     if analysis is None:
         return {}
     return asdict(analysis.artifact_report)
