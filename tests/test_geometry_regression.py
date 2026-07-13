@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 
 from spool_house_ai.config import apply_cleanup_preset, load_config
 from spool_house_ai.processing.analysis import analyze_image
+from spool_house_ai.processing.generic_3mf import validate_generic_3mf
 from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh
 from spool_house_ai.test_mode import create_real_world_geometry_test_image
 
@@ -79,15 +80,20 @@ class GeometryRegressionTests(unittest.TestCase):
 
     def test_raster_mesh_with_hole_is_watertight(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            stl_path = Path(temp_dir) / "raster_hole.stl"
+            temp_path = Path(temp_dir)
+            stl_path = temp_path / "raster_hole.stl"
+            generic_3mf_path = temp_path / "raster_hole.3mf"
             mask = np.zeros((64, 96), dtype=bool)
             mask[8:56, 10:86] = True
             mask[24:40, 38:58] = False
 
-            create_relief_stl(mask, stl_path, self.stl_config)
+            stl_result = create_relief_stl(mask, stl_path, self.stl_config, generic_3mf_path=generic_3mf_path)
             report = validate_stl_mesh(stl_path)
 
             self.assertTrue(report.exists)
+            self.assertTrue(generic_3mf_path.exists())
+            self.assertTrue(stl_result.generic_3mf_metadata["generic_3mf_created"])
+            self.assertTrue(validate_generic_3mf(generic_3mf_path).passed)
             self.assertTrue(report.watertight)
             self.assertEqual(report.open_edge_count, 0)
             self.assertEqual(report.overused_edge_count, 0)

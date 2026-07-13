@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--product-mode",
-        choices=["flat_relief", "keychain", "wall_art", "lithophane"],
+        choices=["flat_relief", "keychain", "wall_art", "lithophane", "filament_swap_relief"],
         help="Override the configured product mode.",
     )
     parser.add_argument(

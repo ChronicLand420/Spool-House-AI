@@ -9,9 +9,10 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
-    from PySide6.QtGui import QDesktopServices, QFontMetrics, QIcon, QPixmap
+    from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QIcon, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
+        QAbstractItemView,
         QCheckBox,
         QComboBox,
         QDialog,
@@ -32,6 +33,8 @@ try:
         QProgressBar,
         QScrollArea,
         QSplitter,
+        QTableWidget,
+        QTableWidgetItem,
         QVBoxLayout,
         QWidget,
         QDoubleSpinBox,
@@ -59,6 +62,16 @@ from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config, 
 from spool_house_ai.logging_setup import configure_logging
 from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths, build_job_output_paths_for_stem
 from spool_house_ai.pipeline import ImagePipeline
+from spool_house_ai.processing.filament_layers import calculate_filament_swap_plan
+from spool_house_ai.slicer_integration import (
+    OPEN_IN_SLICER_LABEL,
+    SLICER_LABELS,
+    build_slicer_launch_plan,
+    discover_slicer,
+    launch_slicer_plan,
+    normalize_preferred_slicer,
+    select_slicer_input,
+)
 from spool_house_ai.ui_preferences import (
     UiPreferences,
     default_ui_preferences,
@@ -85,6 +98,7 @@ PRESET_DESCRIPTIONS = {
     "drip_logo": "Preserves nearby drips and drops while removing far-away specks.",
     "splatter_logo": "Keeps rough logo texture and near-body splatter detail.",
     "line_art": "For sneaker outlines, coloring-page art, tattoo flash, and clean interior linework.",
+    "preserve_floating_islands": "Preserves intentional detached dots, stars, accents, and multipart artwork.",
 }
 
 VISIBLE_CLEANUP_PRESETS = [
@@ -94,6 +108,15 @@ VISIBLE_CLEANUP_PRESETS = [
     ("Drip / Graffiti", "drip_logo"),
     ("Splatter / Rough", "splatter_logo"),
     ("Line Art", "line_art"),
+    ("Preserve Floating Islands", "preserve_floating_islands"),
+]
+
+VISIBLE_PRODUCT_MODES = [
+    ("Flat Relief", "flat_relief"),
+    ("Keychain", "keychain"),
+    ("Wall Art", "wall_art"),
+    ("Lithophane", "lithophane"),
+    ("Filament Swap Relief", "filament_swap_relief"),
 ]
 
 ACCENT_STYLES = {
@@ -372,6 +395,56 @@ class SettingsDialog(QDialog):
         output_layout.addLayout(output_button_row)
         scroll_layout.addWidget(output_group)
 
+        slicer_group = QGroupBox("Slicer")
+        slicer_group.setObjectName("settingsGroup")
+        slicer_layout = QVBoxLayout(slicer_group)
+        slicer_hint = QLabel(
+            "Choose how Open in Slicer launches the selected model. SHS opens the file only; it does not slice, export G-code, or change slicer profiles."
+        )
+        slicer_hint.setObjectName("mutedText")
+        slicer_hint.setWordWrap(True)
+        self.preferred_slicer_combo = self._combo(
+            [
+                ("System default", "system_default"),
+                ("OrcaSlicer", "orca"),
+                ("Bambu Studio", "bambu"),
+            ]
+        )
+        self.prefer_generic_3mf = QCheckBox("Prefer validated generic 3MF")
+        self.prefer_generic_3mf.setToolTip("Use the validated generic 3MF when available, with STL fallback.")
+        slicer_form = QFormLayout()
+        slicer_form.addRow("Preferred slicer", self.preferred_slicer_combo)
+        slicer_layout.addWidget(slicer_hint)
+        slicer_layout.addLayout(slicer_form)
+        slicer_layout.addWidget(self.prefer_generic_3mf)
+
+        self.orca_path_edit = QLineEdit()
+        self.orca_path_edit.setPlaceholderText("Optional OrcaSlicer executable path")
+        self.bambu_path_edit = QLineEdit()
+        self.bambu_path_edit.setPlaceholderText("Optional Bambu Studio executable path")
+        orca_row = QHBoxLayout()
+        self.choose_orca_button = QPushButton("Browse")
+        self.choose_orca_button.setObjectName("secondaryButton")
+        orca_row.addWidget(self.orca_path_edit, 1)
+        orca_row.addWidget(self.choose_orca_button)
+        bambu_row = QHBoxLayout()
+        self.choose_bambu_button = QPushButton("Browse")
+        self.choose_bambu_button.setObjectName("secondaryButton")
+        bambu_row.addWidget(self.bambu_path_edit, 1)
+        bambu_row.addWidget(self.choose_bambu_button)
+        self.detect_slicers_button = QPushButton("Detect Slicers")
+        self.detect_slicers_button.setObjectName("secondaryButton")
+        self.slicer_detection_status = QLabel("")
+        self.slicer_detection_status.setObjectName("mutedText")
+        self.slicer_detection_status.setWordWrap(True)
+        slicer_layout.addWidget(QLabel("OrcaSlicer executable"))
+        slicer_layout.addLayout(orca_row)
+        slicer_layout.addWidget(QLabel("Bambu Studio executable"))
+        slicer_layout.addLayout(bambu_row)
+        slicer_layout.addWidget(self.detect_slicers_button)
+        slicer_layout.addWidget(self.slicer_detection_status)
+        scroll_layout.addWidget(slicer_group)
+
         about = QGroupBox("About / Quick Help")
         about.setObjectName("settingsGroup")
         about_layout = QVBoxLayout(about)
@@ -380,7 +453,7 @@ class SettingsDialog(QDialog):
         about_text = QLabel(
             f"Spool House Studio {version or ''}\n"
             "Built by ChronicLand420\n\n"
-            "Workflow: add artwork, pick an artwork style, generate, review outputs, then open STL/SVG/job summary.\n\n"
+            "Workflow: add artwork, pick an artwork style, generate, review outputs, then open the model in your slicer.\n\n"
             f"Default output folder: {output_dir}"
         )
         about_text.setWordWrap(True)
@@ -432,12 +505,19 @@ class SettingsDialog(QDialog):
         self.close_button.clicked.connect(self.accept)
         for combo in [self.theme_combo, self.accent_combo, self.density_combo, self.preview_combo, self.log_combo]:
             combo.currentIndexChanged.connect(self._emit_changed)
+        self.preferred_slicer_combo.currentIndexChanged.connect(self._emit_changed)
         for checkbox in [self.open_output_after, self.show_summary_after, self.use_last_preset]:
             checkbox.toggled.connect(self._emit_changed)
+        self.prefer_generic_3mf.toggled.connect(self._emit_changed)
+        self.orca_path_edit.editingFinished.connect(self._emit_changed)
+        self.bambu_path_edit.editingFinished.connect(self._emit_changed)
         self.choose_output_button.clicked.connect(self.choose_output_folder)
         self.reset_output_button.clicked.connect(self.reset_output_folder)
         self.open_output_root_button.clicked.connect(self.open_output_folder)
         self.copy_output_root_button.clicked.connect(self.copy_output_folder)
+        self.choose_orca_button.clicked.connect(lambda: self.choose_slicer_executable("orca"))
+        self.choose_bambu_button.clicked.connect(lambda: self.choose_slicer_executable("bambu"))
+        self.detect_slicers_button.clicked.connect(self.detect_slicers)
 
         self.set_preferences(preferences)
         self._apply_screen_safe_geometry()
@@ -525,6 +605,10 @@ class SettingsDialog(QDialog):
         self.use_last_preset.setChecked(preferences.use_last_selected_preset)
         self.output_folder_edit.setText(preferences.output_folder)
         self.output_folder_edit.setToolTip(preferences.output_folder or str(self.default_output_dir))
+        self._set_combo(self.preferred_slicer_combo, normalize_preferred_slicer(preferences.preferred_slicer))
+        self.prefer_generic_3mf.setChecked(preferences.prefer_generic_3mf)
+        self.orca_path_edit.setText(preferences.orca_executable_path)
+        self.bambu_path_edit.setText(preferences.bambu_executable_path)
         self._syncing = False
 
     def preferences(self) -> UiPreferences:
@@ -539,6 +623,10 @@ class SettingsDialog(QDialog):
             use_last_selected_preset=self.use_last_preset.isChecked(),
             last_cleanup_preset=self.last_cleanup_preset,
             output_folder=self.output_folder_edit.text().strip(),
+            preferred_slicer=str(self.preferred_slicer_combo.currentData() or "system_default"),
+            orca_executable_path=self.orca_path_edit.text().strip(),
+            bambu_executable_path=self.bambu_path_edit.text().strip(),
+            prefer_generic_3mf=self.prefer_generic_3mf.isChecked(),
         )
 
     def reset_preferences(self) -> None:
@@ -557,6 +645,33 @@ class SettingsDialog(QDialog):
             return
         self.output_folder_edit.setText(str(Path(chosen).expanduser().resolve()))
         self.output_folder_edit.setToolTip(self.output_folder_edit.text())
+        self._emit_changed()
+
+    def choose_slicer_executable(self, slicer: str) -> None:
+        label = SLICER_LABELS.get(slicer, "Slicer")
+        current = self.orca_path_edit.text().strip() if slicer == "orca" else self.bambu_path_edit.text().strip()
+        start_dir = str(Path(current).parent) if current else str(Path.home())
+        chosen, _filter = QFileDialog.getOpenFileName(self, f"Choose {label} Executable", start_dir, "Executables (*.exe)")
+        if not chosen:
+            return
+        resolved = str(Path(chosen).expanduser().resolve())
+        if slicer == "orca":
+            self.orca_path_edit.setText(resolved)
+        else:
+            self.bambu_path_edit.setText(resolved)
+        self._emit_changed()
+
+    def detect_slicers(self) -> None:
+        messages: list[str] = []
+        for slicer, edit in (("orca", self.orca_path_edit), ("bambu", self.bambu_path_edit)):
+            result = discover_slicer(slicer, configured_path=edit.text().strip())
+            label = SLICER_LABELS[slicer]
+            if result.found and result.executable_path:
+                edit.setText(str(result.executable_path))
+                messages.append(f"{label}: {result.discovery_method}")
+            else:
+                messages.append(f"{label}: not found")
+        self.slicer_detection_status.setText("; ".join(messages))
         self._emit_changed()
 
     def reset_output_folder(self) -> None:
@@ -613,7 +728,11 @@ class PipelineWorker(QThread):
         ok = pipeline.process(self.image_path, stage_callback=on_stage)
         output_dir = build_job_output_paths(self.config.output_dir, self.image_path).job_root
         requested_backend = (
-            "lithophane_heightfield" if self.config.stl.product_mode == "lithophane" else self.config.stl.stl_backend
+            "lithophane_heightfield"
+            if self.config.stl.product_mode == "lithophane"
+            else "filament_swap_heightfield"
+            if self.config.stl.product_mode == "filament_swap_relief"
+            else self.config.stl.stl_backend
         )
         self.finished_job.emit(ok, str(output_dir), self.image_path.stem, str(self.image_path), requested_backend)
 
@@ -777,7 +896,10 @@ class MainWindow(QMainWindow):
         self.generate_all_button.clicked.connect(self.generate_all)
         self.open_output_button = QPushButton("Open Output Folder")
         self.open_output_button.setToolTip("Open the latest job folder after generation.")
+        self.open_slicer_button = QPushButton(OPEN_IN_SLICER_LABEL)
+        self.open_slicer_button.setToolTip("Open the validated generic 3MF when available, with STL fallback.")
         self.open_stl_button = QPushButton("Open STL")
+        self.open_3mf_button = QPushButton("Open 3MF")
         self.open_svg_button = QPushButton("Open SVG")
         self.open_preview_button = QPushButton("Open Preview")
         self.open_output_root_button = QPushButton("Open Root Folder")
@@ -790,7 +912,9 @@ class MainWindow(QMainWindow):
         self.copy_job_status_button = QPushButton("Copy Job Status Path")
         self.output_buttons = [
             self.open_output_button,
+            self.open_slicer_button,
             self.open_stl_button,
+            self.open_3mf_button,
             self.open_svg_button,
             self.open_preview_button,
             self.copy_svg_button,
@@ -803,7 +927,9 @@ class MainWindow(QMainWindow):
         self.open_output_button.clicked.connect(self.open_latest_or_root)
         self.open_output_root_button.clicked.connect(self.open_output_root)
         self.copy_output_root_button.clicked.connect(self.copy_output_root)
+        self.open_slicer_button.clicked.connect(self.open_in_slicer)
         self.open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
+        self.open_3mf_button.clicked.connect(lambda: self.open_named_output(".3mf"))
         self.open_svg_button.clicked.connect(lambda: self.open_named_output(".svg"))
         self.open_preview_button.clicked.connect(lambda: self.open_named_output("_preview.png"))
         self.copy_svg_button.clicked.connect(lambda: self.copy_named_output(".svg"))
@@ -832,13 +958,15 @@ class MainWindow(QMainWindow):
         output_grid.addWidget(self.open_output_root_button, 0, 0)
         output_grid.addWidget(self.copy_output_root_button, 0, 1)
         output_grid.addWidget(self.open_output_button, 1, 0, 1, 2)
-        output_grid.addWidget(self.open_stl_button, 2, 0)
-        output_grid.addWidget(self.open_svg_button, 2, 1)
-        output_grid.addWidget(self.open_preview_button, 3, 0, 1, 2)
-        output_grid.addWidget(self.copy_stl_button, 4, 0)
-        output_grid.addWidget(self.copy_svg_button, 4, 1)
-        output_grid.addWidget(self.copy_mesh_report_button, 5, 0, 1, 2)
-        output_grid.addWidget(self.copy_job_status_button, 6, 0, 1, 2)
+        output_grid.addWidget(self.open_slicer_button, 2, 0, 1, 2)
+        output_grid.addWidget(self.open_stl_button, 3, 0)
+        output_grid.addWidget(self.open_3mf_button, 3, 1)
+        output_grid.addWidget(self.open_svg_button, 4, 0, 1, 2)
+        output_grid.addWidget(self.open_preview_button, 5, 0, 1, 2)
+        output_grid.addWidget(self.copy_stl_button, 6, 0)
+        output_grid.addWidget(self.copy_svg_button, 6, 1)
+        output_grid.addWidget(self.copy_mesh_report_button, 7, 0, 1, 2)
+        output_grid.addWidget(self.copy_job_status_button, 8, 0, 1, 2)
         layout.addLayout(output_grid)
         review_title = QLabel("Stage Compare")
         review_title.setObjectName("sectionTitle")
@@ -946,15 +1074,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
         self.stl_backend = self._backend_combo()
-        self.product_mode = self._combo(
-            [
-                ("Flat Relief", "flat_relief"),
-                ("Keychain", "keychain"),
-                ("Wall Art", "wall_art"),
-                ("Lithophane", "lithophane"),
-            ],
-            self.config.stl.product_mode,
-        )
+        self.product_mode = self._combo(VISIBLE_PRODUCT_MODES, self.config.stl.product_mode)
         self.product_mode.currentIndexChanged.connect(self._product_mode_changed)
         self.detail_mode = self._combo(
             [
@@ -1005,6 +1125,65 @@ class MainWindow(QMainWindow):
         self.lithophane_max_pixels = self._spin(1000, 250000, self.config.stl.lithophane_max_pixels)
         self.lithophane_invert = QCheckBox("Invert lithophane")
         self.lithophane_invert.setChecked(self.config.stl.lithophane_invert)
+        self.lithophane_autocontrast = QCheckBox("Autocontrast")
+        self.lithophane_autocontrast.setChecked(self.config.stl.lithophane_autocontrast_enabled)
+        self.lithophane_autocontrast_cutoff = self._double_spin(
+            0.0,
+            20.0,
+            self.config.stl.lithophane_autocontrast_cutoff_percent,
+        )
+        self.lithophane_contrast = self._double_spin(0.5, 2.5, self.config.stl.lithophane_contrast)
+        self.lithophane_gamma = self._double_spin(0.5, 2.5, self.config.stl.lithophane_gamma)
+        self.lithophane_sharpen = self._double_spin(0.0, 3.0, self.config.stl.lithophane_sharpen_strength)
+        self.lithophane_denoise = self._spin(0, 4, self.config.stl.lithophane_denoise_radius_px)
+        self.filament_width = self._double_spin(20.0, 300.0, self.config.filament_swap_relief.width_mm)
+        self.filament_color_count = self._spin(2, 5, self.config.filament_swap_relief.color_count)
+        self.filament_base_height = self._double_spin(0.2, 5.0, self.config.filament_swap_relief.base_height_mm)
+        self.filament_layer_step = self._double_spin(0.1, 3.0, self.config.filament_swap_relief.layer_step_mm)
+        self.filament_first_layer_height = self._double_spin(
+            0.05,
+            1.0,
+            self.config.filament_swap_relief.first_layer_height_mm,
+        )
+        self.filament_normal_layer_height = self._double_spin(
+            0.05,
+            1.0,
+            self.config.filament_swap_relief.layer_height_mm,
+        )
+        self.filament_alignment_mode = self._combo(
+            [("Snap up", "snap_up"), ("Snap nearest", "snap_nearest"), ("Strict", "strict")],
+            self.config.filament_swap_relief.height_alignment_mode,
+        )
+        self.filament_palette_color_space = self._combo(
+            [("RGB", "rgb"), ("LAB", "lab")],
+            self.config.filament_swap_relief.palette_color_space,
+        )
+        self.filament_island_policy = self._combo(
+            [
+                ("Preserve all", "preserve_all"),
+                ("Remove below threshold", "remove_below_threshold"),
+                ("Merge with nearest region", "merge_with_nearest_region"),
+                ("Connect within maximum gap", "connect_within_maximum_gap"),
+            ],
+            self.config.filament_swap_relief.island_policy,
+        )
+        self.filament_island_policy.currentIndexChanged.connect(self._update_filament_policy_controls)
+        self.filament_min_region_area = self._spin(0, 10000, self.config.filament_swap_relief.min_region_area_px)
+        self.filament_merge_distance = self._spin(0, 100, self.config.filament_swap_relief.island_merge_max_distance_px)
+        self.filament_connect_gap = self._spin(0, 100, self.config.filament_swap_relief.island_connect_max_gap_px)
+        self.filament_connection_width = self._spin(1, 20, self.config.filament_swap_relief.island_connection_width_px)
+        self.filament_auto_background_ignore = QCheckBox("Auto background ignore")
+        self.filament_auto_background_ignore.setChecked(self.config.filament_swap_relief.auto_background_ignore)
+        for control in [
+            self.filament_color_count,
+            self.filament_base_height,
+            self.filament_layer_step,
+            self.filament_first_layer_height,
+            self.filament_normal_layer_height,
+        ]:
+            signal = control.valueChanged
+            signal.connect(self._refresh_filament_color_plan_estimate)
+        self.filament_alignment_mode.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
 
         preset_group = self._form_group("Presets", [("Artwork style", self.cleanup_preset)])
         self.preset_help = QLabel("")
@@ -1024,6 +1203,13 @@ class MainWindow(QMainWindow):
         self.lithophane_note.setObjectName("presetDescription")
         self.lithophane_note.setWordWrap(True)
         product_group.layout().addRow(self.lithophane_note)
+        self.filament_swap_note = QLabel(
+            "Filament Swap Relief uses detected colors as stepped heights for manual filament swaps. "
+            "Cleanup presets, detail handling, and STL backend options are ignored."
+        )
+        self.filament_swap_note.setObjectName("presetDescription")
+        self.filament_swap_note.setWordWrap(True)
+        product_group.layout().addRow(self.filament_swap_note)
         layout.addWidget(product_group)
 
         advanced_section = CollapsibleSection("Advanced Settings", expanded=False)
@@ -1069,10 +1255,59 @@ class MainWindow(QMainWindow):
                 ("Min thickness mm", self.lithophane_min_thickness),
                 ("Max thickness mm", self.lithophane_max_thickness),
                 ("Max sampled pixels", self.lithophane_max_pixels),
+                ("Autocontrast cutoff %", self.lithophane_autocontrast_cutoff),
+                ("Contrast", self.lithophane_contrast),
+                ("Gamma", self.lithophane_gamma),
+                ("Sharpen strength", self.lithophane_sharpen),
+                ("Denoise radius px", self.lithophane_denoise),
             ],
         )
+        self.lithophane_group = lithophane_group
         lithophane_group.layout().addRow(self.lithophane_invert)
+        lithophane_group.layout().addRow(self.lithophane_autocontrast)
         advanced_section.body_layout.addWidget(lithophane_group)
+        filament_group = self._form_group(
+            "Filament Swap Relief",
+            [
+                ("Width mm", self.filament_width),
+                ("Color count", self.filament_color_count),
+                ("Base height mm", self.filament_base_height),
+                ("Step height mm", self.filament_layer_step),
+                ("First layer height mm", self.filament_first_layer_height),
+                ("Normal layer height mm", self.filament_normal_layer_height),
+                ("Height alignment", self.filament_alignment_mode),
+                ("Palette color space", self.filament_palette_color_space),
+                ("Island handling", self.filament_island_policy),
+                ("Min region area px", self.filament_min_region_area),
+                ("Merge max distance px", self.filament_merge_distance),
+                ("Connection max gap px", self.filament_connect_gap),
+                ("Connection width px", self.filament_connection_width),
+            ],
+        )
+        self.filament_group = filament_group
+        filament_group.layout().addRow(self.filament_auto_background_ignore)
+        advanced_section.body_layout.addWidget(filament_group)
+        self.filament_plan_group = QGroupBox("Filament Color Plan")
+        self.filament_plan_group.setObjectName("settingsGroup")
+        plan_layout = QVBoxLayout(self.filament_plan_group)
+        plan_layout.setContentsMargins(12, 12, 12, 12)
+        plan_layout.setSpacing(8)
+        self.filament_plan_note = QLabel("Estimated rows use current settings. Exact colors appear after generation.")
+        self.filament_plan_note.setObjectName("mutedText")
+        self.filament_plan_note.setWordWrap(True)
+        self.filament_plan_table = QTableWidget(0, 10)
+        self.filament_plan_table.setHorizontalHeaderLabels(
+            ["Order", "Color", "Hex", "Req start", "Aligned start", "First", "Last", "Change before", "Layers", "Warning"]
+        )
+        self.filament_plan_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.filament_plan_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.filament_plan_table.setMinimumHeight(150)
+        self.filament_plan_table.setMaximumHeight(220)
+        self.filament_plan_table.horizontalHeader().setStretchLastSection(True)
+        self.filament_plan_table.verticalHeader().setVisible(False)
+        plan_layout.addWidget(self.filament_plan_note)
+        plan_layout.addWidget(self.filament_plan_table)
+        advanced_section.body_layout.addWidget(self.filament_plan_group)
         layout.addWidget(advanced_section)
         layout.addStretch(1)
         self._update_preset_help()
@@ -1123,14 +1358,27 @@ class MainWindow(QMainWindow):
     def _product_mode_changed(self) -> None:
         if not hasattr(self, "product_mode"):
             return
-        is_lithophane = self._combo_value(self.product_mode) == "lithophane"
+        product_mode = self._combo_value(self.product_mode)
+        is_lithophane = product_mode == "lithophane"
+        is_filament_swap = product_mode == "filament_swap_relief"
+        is_special_heightfield = is_lithophane or is_filament_swap
         if hasattr(self, "lithophane_note"):
             self.lithophane_note.setVisible(is_lithophane)
+        if hasattr(self, "filament_swap_note"):
+            self.filament_swap_note.setVisible(is_filament_swap)
+        if hasattr(self, "lithophane_group"):
+            self.lithophane_group.setVisible(is_lithophane)
+        if hasattr(self, "filament_group"):
+            self.filament_group.setVisible(is_filament_swap)
+        if hasattr(self, "filament_plan_group"):
+            self.filament_plan_group.setVisible(is_filament_swap)
         contour_controls = [
             getattr(self, "cleanup_preset", None),
             getattr(self, "detail_mode", None),
             getattr(self, "stl_backend", None),
             getattr(self, "output_scale", None),
+            getattr(self, "base_height", None),
+            getattr(self, "extrusion_height", None),
             getattr(self, "threshold", None),
             getattr(self, "smoothing", None),
             getattr(self, "min_area", None),
@@ -1153,13 +1401,134 @@ class MainWindow(QMainWindow):
             getattr(self, "lithophane_max_thickness", None),
             getattr(self, "lithophane_max_pixels", None),
             getattr(self, "lithophane_invert", None),
+            getattr(self, "lithophane_autocontrast", None),
+            getattr(self, "lithophane_autocontrast_cutoff", None),
+            getattr(self, "lithophane_contrast", None),
+            getattr(self, "lithophane_gamma", None),
+            getattr(self, "lithophane_sharpen", None),
+            getattr(self, "lithophane_denoise", None),
+        ]
+        filament_controls = [
+            getattr(self, "filament_width", None),
+            getattr(self, "filament_color_count", None),
+            getattr(self, "filament_base_height", None),
+            getattr(self, "filament_layer_step", None),
+            getattr(self, "filament_first_layer_height", None),
+            getattr(self, "filament_normal_layer_height", None),
+            getattr(self, "filament_alignment_mode", None),
+            getattr(self, "filament_palette_color_space", None),
+            getattr(self, "filament_island_policy", None),
+            getattr(self, "filament_min_region_area", None),
+            getattr(self, "filament_merge_distance", None),
+            getattr(self, "filament_connect_gap", None),
+            getattr(self, "filament_connection_width", None),
+            getattr(self, "filament_auto_background_ignore", None),
         ]
         for control in contour_controls:
             if control is not None:
-                control.setEnabled(not is_lithophane)
+                control.setEnabled(not is_special_heightfield)
         for control in lithophane_controls:
             if control is not None:
                 control.setEnabled(is_lithophane)
+        for control in filament_controls:
+            if control is not None:
+                control.setEnabled(is_filament_swap)
+        if hasattr(self, "filament_plan_table"):
+            self.filament_plan_table.setEnabled(is_filament_swap)
+        self._update_filament_policy_controls()
+        self._refresh_filament_color_plan_estimate()
+
+    def _update_filament_policy_controls(self) -> None:
+        if not hasattr(self, "filament_island_policy") or not hasattr(self, "product_mode"):
+            return
+        is_filament_swap = self._combo_value(self.product_mode) == "filament_swap_relief"
+        policy = self._combo_value(self.filament_island_policy)
+        threshold_enabled = is_filament_swap and policy in {
+            "remove_below_threshold",
+            "merge_with_nearest_region",
+            "connect_within_maximum_gap",
+        }
+        merge_enabled = is_filament_swap and policy == "merge_with_nearest_region"
+        connect_enabled = is_filament_swap and policy == "connect_within_maximum_gap"
+        self.filament_min_region_area.setEnabled(threshold_enabled)
+        self.filament_merge_distance.setEnabled(merge_enabled)
+        self.filament_connect_gap.setEnabled(connect_enabled)
+        self.filament_connection_width.setEnabled(connect_enabled)
+
+    def _refresh_filament_color_plan_estimate(self, *_args: object) -> None:
+        if not hasattr(self, "filament_plan_table") or not hasattr(self, "product_mode"):
+            return
+        if self._combo_value(self.product_mode) != "filament_swap_relief":
+            self.filament_plan_table.setRowCount(0)
+            return
+        colors = [
+            {
+                "order": index,
+                "index": index,
+                "cluster_label": index - 1,
+                "hex": "TBD",
+                "suggested_color_name": f"Color {index}",
+            }
+            for index in range(1, self.filament_color_count.value() + 1)
+        ]
+        try:
+            plan = calculate_filament_swap_plan(
+                colors,
+                base_height_mm=self.filament_base_height.value(),
+                layer_step_mm=self.filament_layer_step.value(),
+                first_layer_height_mm=self.filament_first_layer_height.value(),
+                layer_height_mm=self.filament_normal_layer_height.value(),
+                height_alignment_mode=self._combo_value(self.filament_alignment_mode),
+                height_alignment_tolerance_mm=self.config.filament_swap_relief.height_alignment_tolerance_mm,
+                palette_order="estimate",
+            )
+        except Exception as error:
+            self.filament_plan_note.setText(f"Estimated color plan unavailable: {error}")
+            self.filament_plan_table.setRowCount(0)
+            return
+        self.filament_plan_note.setText("Estimated rows use current settings. Exact colors appear after generation.")
+        self._populate_filament_color_plan_table(plan, estimated=True)
+
+    def _load_generated_filament_color_plan(self) -> None:
+        color_plan_path = self._report_output_path("color_plan.json")
+        if not color_plan_path.exists():
+            self._refresh_filament_color_plan_estimate()
+            return
+        try:
+            plan = json.loads(color_plan_path.read_text(encoding="utf-8"))
+        except Exception as error:
+            self.filament_plan_note.setText(f"Could not read generated color plan: {error}")
+            return
+        self.filament_plan_note.setText("Exact generated color plan from reports/color_plan.json.")
+        self._populate_filament_color_plan_table(plan, estimated=False)
+
+    def _populate_filament_color_plan_table(self, plan: dict, *, estimated: bool) -> None:
+        colors = plan.get("colors") or []
+        self.filament_plan_table.setRowCount(len(colors))
+        for row_index, color in enumerate(colors):
+            warning = "; ".join(color.get("warnings") or [])
+            values = [
+                str(color.get("order", color.get("index", row_index + 1))),
+                "",
+                str(color.get("hex", "TBD")),
+                _format_mm_value(color.get("requested_start_z_mm")),
+                _format_mm_value(color.get("aligned_start_z_mm")),
+                str(color.get("first_layer_using_color", "")),
+                str(color.get("last_layer_using_color", "")),
+                "" if color.get("change_before_layer") is None else str(color.get("change_before_layer")),
+                str(color.get("layer_count", "")),
+                "Estimate" if estimated and not warning else warning,
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 1:
+                    hex_color = str(color.get("hex", ""))
+                    if hex_color.startswith("#") and len(hex_color) == 7:
+                        item.setBackground(QColor(hex_color))
+                    else:
+                        item.setText("TBD")
+                self.filament_plan_table.setItem(row_index, column, item)
+        self.filament_plan_table.resizeColumnsToContents()
 
     def open_settings(self) -> None:
         if self.settings_dialog is None:
@@ -1314,7 +1683,14 @@ class MainWindow(QMainWindow):
             return
         image_path = self.pending_jobs[self.batch_index]
         self._append_status_path("Selected input", image_path)
-        requested_backend = "lithophane_heightfield" if self._combo_value(self.product_mode) == "lithophane" else self._selected_stl_backend()
+        product_mode = self._combo_value(self.product_mode)
+        requested_backend = (
+            "lithophane_heightfield"
+            if product_mode == "lithophane"
+            else "filament_swap_heightfield"
+            if product_mode == "filament_swap_relief"
+            else self._selected_stl_backend()
+        )
         self.logs.append(f"Requested STL backend: {requested_backend}")
         self.current_stage = "Intake Room"
         self.current_stage_progress_index = 0
@@ -1395,6 +1771,29 @@ class MainWindow(QMainWindow):
             lithophane_max_thickness_mm=self.lithophane_max_thickness.value(),
             lithophane_invert=self.lithophane_invert.isChecked(),
             lithophane_max_pixels=self.lithophane_max_pixels.value(),
+            lithophane_autocontrast_enabled=self.lithophane_autocontrast.isChecked(),
+            lithophane_autocontrast_cutoff_percent=self.lithophane_autocontrast_cutoff.value(),
+            lithophane_contrast=self.lithophane_contrast.value(),
+            lithophane_gamma=self.lithophane_gamma.value(),
+            lithophane_sharpen_strength=self.lithophane_sharpen.value(),
+            lithophane_denoise_radius_px=self.lithophane_denoise.value(),
+        )
+        filament_swap_relief = replace(
+            self.config.filament_swap_relief,
+            width_mm=self.filament_width.value(),
+            color_count=self.filament_color_count.value(),
+            base_height_mm=self.filament_base_height.value(),
+            layer_step_mm=self.filament_layer_step.value(),
+            first_layer_height_mm=self.filament_first_layer_height.value(),
+            layer_height_mm=self.filament_normal_layer_height.value(),
+            height_alignment_mode=self._combo_value(self.filament_alignment_mode),
+            auto_background_ignore=self.filament_auto_background_ignore.isChecked(),
+            min_region_area_px=self.filament_min_region_area.value(),
+            palette_color_space=self._combo_value(self.filament_palette_color_space),
+            island_policy=self._combo_value(self.filament_island_policy),
+            island_merge_max_distance_px=self.filament_merge_distance.value(),
+            island_connect_max_gap_px=self.filament_connect_gap.value(),
+            island_connection_width_px=self.filament_connection_width.value(),
         )
         return replace(
             self.config,
@@ -1403,6 +1802,7 @@ class MainWindow(QMainWindow):
             silhouette=silhouette,
             svg=svg,
             stl=stl,
+            filament_swap_relief=filament_swap_relief,
         )
 
     def update_room(self, room: str, state: str, message: str, thumbnail: str) -> None:
@@ -1430,6 +1830,7 @@ class MainWindow(QMainWindow):
         if job_status_path.exists():
             self._append_status_path("Job status", job_status_path)
             job_warning_count = self._append_job_status_summary(job_status_path)
+            self._load_generated_filament_color_plan()
         if not mesh_report_path.exists():
             self._set_status_summary("Done" if ok else "Warnings - check log")
         if ok:
@@ -1474,6 +1875,42 @@ class MainWindow(QMainWindow):
     def open_named_output(self, suffix: str) -> None:
         self.open_path(self._named_output_path(suffix))
 
+    def open_in_slicer(self) -> None:
+        paths = self._current_job_paths()
+        job_status = self._current_job_status()
+        selection = select_slicer_input(
+            paths,
+            job_status,
+            prefer_generic_3mf=self.ui_preferences.prefer_generic_3mf,
+        )
+        if not selection.success:
+            QMessageBox.warning(self, APP_DISPLAY_NAME, selection.error)
+            self.logs.append(selection.error)
+            return
+
+        plan = build_slicer_launch_plan(
+            selection,
+            preferred_slicer=self.ui_preferences.preferred_slicer,
+            orca_executable_path=self.ui_preferences.orca_executable_path,
+            bambu_executable_path=self.ui_preferences.bambu_executable_path,
+        )
+        if not plan.can_launch:
+            QMessageBox.warning(self, APP_DISPLAY_NAME, plan.error)
+            self.logs.append(plan.error)
+            return
+
+        result = launch_slicer_plan(
+            plan,
+            system_default_launcher=lambda path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))),
+        )
+        if result.launched:
+            self._set_status_summary(result.message, tooltip=result.message)
+            self.logs.append(result.message)
+        else:
+            message = result.error or "Could not open the selected model in a slicer."
+            QMessageBox.warning(self, APP_DISPLAY_NAME, message)
+            self.logs.append(message)
+
     def copy_named_output(self, suffix: str) -> None:
         self.copy_path(self._named_output_path(suffix))
 
@@ -1489,6 +1926,8 @@ class MainWindow(QMainWindow):
         name = f"{self.current_stem}{suffix}" if suffix.startswith("_") else f"{self.current_stem}{suffix}"
         if paths and suffix == ".stl":
             return self._first_existing_path(paths.stl_path, self.current_output_dir / name)
+        if paths and suffix == ".3mf":
+            return self._first_existing_path(paths.generic_3mf_path, self.current_output_dir / name)
         if paths and suffix == ".svg":
             return self._first_existing_path(paths.svg_path, self.current_output_dir / name)
         if paths and suffix == "_preview.png":
@@ -1501,6 +1940,18 @@ class MainWindow(QMainWindow):
         if not self.current_output_dir or not self.current_stem:
             return None
         return build_job_output_paths_for_stem(self.current_output_dir.parent, self.current_stem)
+
+    def _current_job_status(self) -> dict | None:
+        if not self.current_output_dir:
+            return None
+        status_path = self._report_output_path("job_status.json")
+        if not status_path.exists():
+            return None
+        try:
+            raw = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return raw if isinstance(raw, dict) else None
 
     def _report_output_path(self, filename: str) -> Path:
         if not self.current_output_dir:
@@ -1549,12 +2000,19 @@ class MainWindow(QMainWindow):
             return
         svg_path = self._named_output_path(".svg")
         stl_path = self._named_output_path(".stl")
+        three_mf_path = self._named_output_path(".3mf")
         preview_path = self._named_output_path("_preview.png")
         mesh_report_path = self._report_output_path("mesh_report.json")
         job_status_path = self._report_output_path("job_status.json")
+        paths = self._current_job_paths()
+        status = self._current_job_status()
+        selection = select_slicer_input(paths, status, prefer_generic_3mf=self.ui_preferences.prefer_generic_3mf)
+        three_mf_selection = select_slicer_input(paths, status, prefer_generic_3mf=True)
         availability = {
             self.open_output_button: self.current_output_dir.exists(),
+            self.open_slicer_button: selection.success,
             self.open_stl_button: bool(stl_path and stl_path.exists()),
+            self.open_3mf_button: bool(three_mf_path and three_mf_path.exists() and three_mf_selection.used_generic_3mf),
             self.open_svg_button: bool(svg_path and svg_path.exists()),
             self.open_preview_button: bool(preview_path and preview_path.exists()),
             self.copy_stl_button: bool(stl_path and stl_path.exists()),
@@ -1705,6 +2163,34 @@ class MainWindow(QMainWindow):
             self.logs.append(f"Removed isolated islands: {removed_count}")
         if preserved_count:
             self.logs.append(f"Preserved isolated islands: {preserved_count}")
+        filament_swap = status.get("filament_swap_summary") or {}
+        if filament_swap:
+            self.logs.append(
+                "Filament swap colors: "
+                f"{filament_swap.get('color_count_kept', 0)} kept; "
+                f"final height {filament_swap.get('final_height_mm', '')} mm"
+            )
+            island_summary = filament_swap.get("island_summary") or {}
+            if island_summary:
+                self.logs.append(
+                    "Filament islands: "
+                    f"{island_summary.get('island_policy', '')}; "
+                    f"preserved {island_summary.get('intentionally_preserved_components', 0)}, "
+                    f"removed {island_summary.get('removed_components', 0)}, "
+                    f"merged {island_summary.get('merged_components', 0)}, "
+                    f"connected {island_summary.get('connected_components', 0)}"
+                )
+            for color in (filament_swap.get("detected_colors") or [])[:5]:
+                if color.get("index") == 1:
+                    self.logs.append(
+                        f"Start with {color.get('hex', '')}: layers "
+                        f"{color.get('first_layer_using_color', '')}-{color.get('last_layer_using_color', '')}"
+                    )
+                else:
+                    self.logs.append(
+                        f"Change before layer {color.get('change_before_layer', '')} "
+                        f"to {color.get('hex', '')} at {color.get('aligned_start_z_mm', color.get('filament_change_at_mm', ''))} mm"
+                    )
         return warning_count
 
     def refresh_review(self) -> None:
@@ -1884,7 +2370,8 @@ class MainWindow(QMainWindow):
             QPushButton#sectionToggle { text-align: left; background: __PANEL_ALT__; border: 1px solid __BORDER_SOFT__; color: __TITLE_TEXT__; font-weight: 800; padding: __SECTION_TOGGLE_PADDING__; border-radius: 8px; }
             QPushButton#sectionToggle:hover { border-color: __ACCENT__; background: __ACTIVE_BG__; }
             QPushButton:disabled { background: __DISABLED_BG__; color: __DISABLED_TEXT__; border: 1px solid __BORDER__; }
-            QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: __FIELD__; border: 1px solid __BORDER_SOFT__; color: __TEXT__; border-radius: 5px; padding: 5px; }
+            QListWidget, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTableWidget { background: __FIELD__; border: 1px solid __BORDER_SOFT__; color: __TEXT__; border-radius: 5px; padding: 5px; }
+            QHeaderView::section { background: __PANEL_ALT__; color: __MUTED__; border: 1px solid __BORDER_SOFT__; padding: 4px; }
             QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; }
             QGroupBox#settingsGroup { background: __PANEL_ALT__; border: 1px solid __BORDER__; border-radius: 9px; margin-top: __GROUP_MARGIN_TOP__; padding-top: 10px; font-weight: 800; color: __ACCENT__; }
             QGroupBox#settingsGroup::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
@@ -1930,6 +2417,15 @@ def _format_duration(seconds: float) -> str:
     if hours:
         return f"{hours:d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
+
+def _format_mm_value(value: object) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 if __name__ == "__main__":

@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 import trimesh
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from spool_house_ai.config import StlConfig
 from spool_house_ai.processing.analysis import ImageAnalysis
 from spool_house_ai.processing.geometry import VectorContour
+from spool_house_ai.processing.generic_3mf import (
+    GENERIC_3MF_EXPORTER_VERSION,
+    GENERIC_3MF_NOTICE,
+    export_generic_3mf,
+)
 
 
 @dataclass(frozen=True)
@@ -43,15 +48,22 @@ class StlCreationResult:
     actual_backend: str
     fallback_used: bool
     fallback_reason: str
+    generic_3mf_metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> StlCreationResult:
+def create_relief_stl(
+    analysis: ImageAnalysis | np.ndarray,
+    output_path: Path,
+    config: StlConfig,
+    *,
+    generic_3mf_path: Path | None = None,
+) -> StlCreationResult:
     """Create a simple raised relief STL from a binary silhouette mask."""
     if config.product_mode == "lithophane":
         raise ValueError("Lithophane uses create_lithophane_stl instead of the relief STL pipeline.")
     if config.stl_backend in {"auto_vector_first", "vector_extrusion"}:
         try:
-            _create_vector_extrusion_stl(analysis, output_path, config)
+            mesh = _create_vector_extrusion_stl(analysis, output_path, config)
             vector_report = validate_stl_mesh(output_path)
             if not _mesh_report_is_safe_for_vector_backend(vector_report):
                 raise RuntimeError(
@@ -60,30 +72,51 @@ def create_relief_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, c
                     f"non-manifold edges: {vector_report.non_manifold_edge_count}, "
                     f"failures: {vector_report.failures})"
                 )
+            generic_metadata = export_generic_3mf_for_stl_mesh(
+                mesh,
+                generic_3mf_path,
+                title=output_path.stem,
+                description=f"{config.product_mode} vector extrusion generic 3MF export. {GENERIC_3MF_NOTICE}",
+            )
             return StlCreationResult(
                 requested_backend=config.stl_backend,
                 actual_backend="vector_extrusion",
                 fallback_used=False,
                 fallback_reason="",
+                generic_3mf_metadata=generic_metadata,
             )
         except (ImportError, RuntimeError, ValueError, AttributeError) as error:
-            _create_raster_heightfield_stl(analysis, output_path, config)
+            mesh = _create_raster_heightfield_stl(analysis, output_path, config)
+            generic_metadata = export_generic_3mf_for_stl_mesh(
+                mesh,
+                generic_3mf_path,
+                title=output_path.stem,
+                description=f"{config.product_mode} raster heightfield generic 3MF export. {GENERIC_3MF_NOTICE}",
+            )
             return StlCreationResult(
                 requested_backend=config.stl_backend,
                 actual_backend="raster_heightfield",
                 fallback_used=True,
                 fallback_reason=str(error),
+                generic_3mf_metadata=generic_metadata,
             )
 
     if config.stl_backend != "raster_heightfield":
         raise ValueError(f"Unsupported stl_backend: {config.stl_backend}")
 
-    _create_raster_heightfield_stl(analysis, output_path, config)
+    mesh = _create_raster_heightfield_stl(analysis, output_path, config)
+    generic_metadata = export_generic_3mf_for_stl_mesh(
+        mesh,
+        generic_3mf_path,
+        title=output_path.stem,
+        description=f"{config.product_mode} raster heightfield generic 3MF export. {GENERIC_3MF_NOTICE}",
+    )
     return StlCreationResult(
         requested_backend=config.stl_backend,
         actual_backend="raster_heightfield",
         fallback_used=False,
         fallback_reason="",
+        generic_3mf_metadata=generic_metadata,
     )
 
 
@@ -95,10 +128,13 @@ def create_lithophane_stl(
     preview_path: Path | None = None,
     cleaned_png_path: Path | None = None,
     silhouette_png_path: Path | None = None,
+    processed_preview_path: Path | None = None,
+    generic_3mf_path: Path | None = None,
 ) -> tuple[StlCreationResult, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image, metadata = _load_lithophane_image(image_path, config.lithophane_max_pixels)
-    brightness = np.asarray(image, dtype=np.float32) / 255.0
+    processed_image = _preprocess_lithophane_image(image, config)
+    brightness = np.asarray(processed_image, dtype=np.float32) / 255.0
     thickness = lithophane_thickness_from_brightness(
         brightness,
         min_thickness_mm=config.lithophane_min_thickness_mm,
@@ -107,6 +143,12 @@ def create_lithophane_stl(
     )
     mesh, bounds_metadata = _lithophane_mesh_from_thickness(thickness, config.lithophane_width_mm)
     mesh.export(output_path)
+    generic_3mf_metadata = export_generic_3mf_for_stl_mesh(
+        mesh,
+        generic_3mf_path,
+        title=output_path.stem,
+        description=f"Lithophane generic 3MF export. {GENERIC_3MF_NOTICE}",
+    )
 
     if cleaned_png_path is not None:
         cleaned_png_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,11 +156,15 @@ def create_lithophane_stl(
     if preview_path is not None:
         preview_path.parent.mkdir(parents=True, exist_ok=True)
         _save_lithophane_preview(thickness, preview_path)
+    if processed_preview_path is not None:
+        processed_preview_path.parent.mkdir(parents=True, exist_ok=True)
+        processed_image.save(processed_preview_path)
     if silhouette_png_path is not None:
         silhouette_png_path.parent.mkdir(parents=True, exist_ok=True)
         _save_lithophane_preview(thickness, silhouette_png_path)
 
     metadata.update(bounds_metadata)
+    metadata.update(generic_3mf_metadata)
     metadata.update(
         {
             "backend": "lithophane_heightfield",
@@ -129,6 +175,15 @@ def create_lithophane_stl(
             "actual_min_thickness_mm": round(float(np.min(thickness)), 4),
             "actual_max_thickness_mm": round(float(np.max(thickness)), 4),
             "cleanup_presets_ignored": True,
+            "preprocessing": {
+                "autocontrast_enabled": config.lithophane_autocontrast_enabled,
+                "autocontrast_cutoff_percent": config.lithophane_autocontrast_cutoff_percent,
+                "contrast": config.lithophane_contrast,
+                "gamma": config.lithophane_gamma,
+                "sharpen_strength": config.lithophane_sharpen_strength,
+                "denoise_radius_px": config.lithophane_denoise_radius_px,
+                "processed_preview_path": str(processed_preview_path) if processed_preview_path else "",
+            },
         }
     )
     return (
@@ -137,9 +192,53 @@ def create_lithophane_stl(
             actual_backend="lithophane_heightfield",
             fallback_used=False,
             fallback_reason="",
+            generic_3mf_metadata=generic_3mf_metadata,
         ),
         metadata,
     )
+
+
+def export_generic_3mf_for_stl_mesh(
+    mesh: trimesh.Trimesh,
+    output_path: Path | None,
+    *,
+    title: str,
+    description: str,
+) -> dict[str, Any]:
+    base = {
+        "generic_3mf_enabled": output_path is not None,
+        "generic_3mf_created": False,
+        "generic_3mf_path": str(output_path) if output_path is not None else "",
+        "generic_3mf_validation_passed": False,
+        "generic_3mf_validation_errors": [],
+        "generic_3mf_units": "millimeter" if output_path is not None else "",
+        "generic_3mf_bounds": [],
+        "source_mesh_bounds": [],
+        "bounds_match": False,
+        "archive_entries": [],
+        "generic_3mf_exporter_version": GENERIC_3MF_EXPORTER_VERSION,
+        "generic_export_notice": GENERIC_3MF_NOTICE,
+    }
+    if output_path is None:
+        return base
+    try:
+        exported = export_generic_3mf(
+            mesh,
+            output_path,
+            title=title,
+            application="Spool House Studio",
+            description=description,
+        )
+    except Exception as error:
+        return {
+            **base,
+            "generic_3mf_validation_errors": [str(error)],
+        }
+    return {
+        **base,
+        **exported,
+        "generic_3mf_exporter_version": exported.get("exporter_version", GENERIC_3MF_EXPORTER_VERSION),
+    }
 
 
 def lithophane_thickness_from_brightness(
@@ -158,7 +257,30 @@ def lithophane_thickness_from_brightness(
     return max_thickness_mm - normalized * thickness_range
 
 
-def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
+def _preprocess_lithophane_image(image: Image.Image, config: StlConfig) -> Image.Image:
+    processed = image.convert("L")
+    denoise_radius = max(0, int(config.lithophane_denoise_radius_px))
+    if denoise_radius > 0:
+        processed = processed.filter(ImageFilter.MedianFilter(size=denoise_radius * 2 + 1))
+    if config.lithophane_autocontrast_enabled:
+        cutoff = min(max(float(config.lithophane_autocontrast_cutoff_percent), 0.0), 20.0)
+        processed = ImageOps.autocontrast(processed, cutoff=cutoff)
+    contrast = max(float(config.lithophane_contrast), 0.01)
+    if contrast != 1.0:
+        processed = ImageEnhance.Contrast(processed).enhance(contrast)
+    gamma = max(float(config.lithophane_gamma), 0.01)
+    if gamma != 1.0:
+        values = np.asarray(processed, dtype=np.float32) / 255.0
+        adjusted = np.clip(np.power(values, gamma) * 255.0, 0, 255).astype(np.uint8)
+        processed = Image.fromarray(adjusted, mode="L")
+    sharpen_strength = max(float(config.lithophane_sharpen_strength), 0.0)
+    if sharpen_strength > 0:
+        processed = ImageEnhance.Sharpness(processed).enhance(1.0 + sharpen_strength)
+    return processed
+
+
+def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> trimesh.Trimesh:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     mask = _mask_for_stl(analysis, config)
     mask = _prepare_product_mask(mask, config)
     resized_mask, detail_mask, color_masks = _resize_analysis_masks(analysis, mask, config)
@@ -216,9 +338,11 @@ def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_
 
     mesh = trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=True)
     mesh.export(output_path)
+    return mesh
 
 
-def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> None:
+def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> trimesh.Trimesh:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     if not isinstance(analysis, ImageAnalysis) or not analysis.vector_contours:
         raise ValueError("Vector extrusion requires analyzed vector contours.")
     if config.product_mode == "keychain" and config.add_keychain_hole:
@@ -285,6 +409,7 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
 
     mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
     mesh.export(output_path)
+    return mesh
 
 
 def _valid_polygon_parts(geometry):

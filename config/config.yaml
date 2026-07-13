@@ -106,6 +106,39 @@ stl:
   lithophane_max_thickness_mm: 3.0
   lithophane_invert: false
   lithophane_max_pixels: 60000
+  lithophane_autocontrast_enabled: false
+  lithophane_autocontrast_cutoff_percent: 0.5
+  lithophane_contrast: 1.0
+  lithophane_gamma: 1.0
+  lithophane_sharpen_strength: 0.0
+  lithophane_denoise_radius_px: 0
+
+filament_swap_relief:
+  width_mm: 120.0
+  color_count: 3
+  base_height_mm: 0.8
+  layer_step_mm: 0.4
+  first_layer_height_mm: 0.20
+  layer_height_mm: 0.20
+  height_alignment_mode: snap_up
+  height_alignment_tolerance_mm: 0.001
+  auto_background_ignore: true
+  background_border_sample_px: 12
+  background_confidence_threshold: 0.45
+  max_sampled_pixels: 90000
+  min_region_area_px: 30
+  smooth_edges: true
+  edge_smoothing_px: 1
+  color_order: light_to_dark
+  palette_color_space: rgb
+  palette_random_seed: 17
+  island_policy: remove_below_threshold
+  island_merge_max_distance_px: 8
+  island_merge_fallback: remove
+  island_connect_max_gap_px: 3
+  island_connection_width_px: 1
+  island_connect_fallback: remove
+  island_report_components: true
 
 preview:
   image_size_px: 1200

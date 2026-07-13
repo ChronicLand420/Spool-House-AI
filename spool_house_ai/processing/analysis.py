@@ -88,6 +88,8 @@ def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteC
     raw_threshold_mask = threshold_mask.copy()
     threshold_mask, removed_island_mask, artifact_report = _remove_islands_if_enabled(threshold_mask, config)
     smoothed_mask = _smooth_mask(threshold_mask, config)
+    if config.cleanup_preset == "preserve_floating_islands":
+        smoothed_mask = smoothed_mask | threshold_mask
     silhouette_mask, kept_features, removed_features = _remove_small_features(smoothed_mask, config)
     has_transparency = bool(np.any(rgba[:, :, 3] < 255))
     body_mask, hole_mask, detail_mask = _classify_body_holes_and_details(
@@ -129,7 +131,7 @@ def analyze_image(cleaned_png_path: Path, output_path: Path, config: SilhouetteC
         max_curve_error_percent=config.max_curve_error_percent,
     )
     vector_mask = vector_contours_to_mask(vector_contours, final_mask.shape)
-    if np.any(vector_mask) and not geometry_report.fallback_used:
+    if np.any(vector_mask) and not geometry_report.fallback_used and config.cleanup_preset != "preserve_floating_islands":
         final_mask = vector_mask
 
     output_image = np.where(final_mask, 0, 255).astype(np.uint8)

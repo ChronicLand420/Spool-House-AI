@@ -11,6 +11,7 @@ class JobOutputPaths:
     source_dir: Path
     svg_dir: Path
     stl_dir: Path
+    three_mf_dir: Path
     previews_dir: Path
     reports_dir: Path
     source_copy_path: Path
@@ -24,9 +25,13 @@ class JobOutputPaths:
     svg_path: Path
     review_svg_path: Path
     stl_path: Path
+    generic_3mf_path: Path
     mesh_report_path: Path
     job_status_path: Path
     job_summary_path: Path
+    filament_swap_report_path: Path
+    color_plan_path: Path
+    filament_swap_plan_path: Path
     geometry_report_path: Path
     preview_path: Path
 
@@ -36,6 +41,7 @@ class JobOutputPaths:
             self.source_dir,
             self.svg_dir,
             self.stl_dir,
+            self.three_mf_dir,
             self.previews_dir,
             self.reports_dir,
         ):
@@ -55,6 +61,7 @@ def build_job_output_paths_for_stem(output_root: Path, stem: str, source_filenam
     source_dir = job_root / "source"
     svg_dir = job_root / "svg"
     stl_dir = job_root / "stl"
+    three_mf_dir = job_root / "3mf"
     previews_dir = job_root / "previews"
     reports_dir = job_root / "reports"
 
@@ -64,6 +71,7 @@ def build_job_output_paths_for_stem(output_root: Path, stem: str, source_filenam
         source_dir=source_dir,
         svg_dir=svg_dir,
         stl_dir=stl_dir,
+        three_mf_dir=three_mf_dir,
         previews_dir=previews_dir,
         reports_dir=reports_dir,
         source_copy_path=source_dir / source_name,
@@ -77,9 +85,13 @@ def build_job_output_paths_for_stem(output_root: Path, stem: str, source_filenam
         svg_path=svg_dir / f"{stem}.svg",
         review_svg_path=svg_dir / f"{stem}_review.svg",
         stl_path=stl_dir / f"{stem}.stl",
+        generic_3mf_path=three_mf_dir / f"{stem}.3mf",
         mesh_report_path=reports_dir / "mesh_report.json",
         job_status_path=reports_dir / "job_status.json",
         job_summary_path=reports_dir / "job_summary.md",
+        filament_swap_report_path=reports_dir / "filament_swap_report.json",
+        color_plan_path=reports_dir / "color_plan.json",
+        filament_swap_plan_path=reports_dir / "filament_swap_plan.txt",
         geometry_report_path=reports_dir / "geometry_report.txt",
         preview_path=previews_dir / f"{stem}_preview.png",
     )

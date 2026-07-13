@@ -16,6 +16,7 @@ from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths
 from spool_house_ai.processing.analysis import analyze_image, save_mask
 from spool_house_ai.processing.background import background_removal_available, remove_background
 from spool_house_ai.processing.preview import create_preview, save_stage_previews
+from spool_house_ai.processing.filament_swap import FILAMENT_SWAP_BACKEND, create_filament_swap_relief_stl
 from spool_house_ai.processing.stl import (
     MeshReport,
     StlCreationResult,
@@ -65,6 +66,7 @@ class ImagePipeline:
         mesh_report: MeshReport | None = None
         analysis = None
         lithophane_metadata: dict[str, Any] | None = None
+        filament_swap_metadata: dict[str, Any] | None = None
 
         def write_job_status() -> None:
             try:
@@ -81,6 +83,7 @@ class ImagePipeline:
                     failures=failures,
                     artifact_summary=_artifact_summary(analysis, self.config),
                     lithophane_metadata=lithophane_metadata,
+                    filament_swap_metadata=filament_swap_metadata,
                     started_at=started_at,
                     finished_at=finished_at,
                     duration_seconds=duration_seconds,
@@ -106,6 +109,7 @@ class ImagePipeline:
             _emit(stage_callback, "Cleanup Lab", "done", "Cleanup skipped for lithophane", image_path)
             _emit(stage_callback, "Detail Analyzer", "active", "Sampling grayscale brightness", image_path)
             stl_created = False
+            processed_lithophane_path = paths.previews_dir / f"{image_path.stem}_lithophane_processed.png"
             try:
                 _emit(stage_callback, "Mesh Forge", "active", "Generating lithophane heightfield", image_path)
                 stl_result, lithophane_metadata = create_lithophane_stl(
@@ -115,7 +119,10 @@ class ImagePipeline:
                     preview_path=preview_path,
                     cleaned_png_path=cleaned_png_path,
                     silhouette_png_path=silhouette_png_path,
+                    processed_preview_path=processed_lithophane_path,
+                    generic_3mf_path=paths.generic_3mf_path,
                 )
+                _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
                 if lithophane_metadata.get("source_downscaled"):
                     message = (
                         "Lithophane image was downscaled to "
@@ -162,7 +169,88 @@ class ImagePipeline:
             _emit(stage_callback, "Output Vault", "done", "Files saved to job folder", preview_path)
             if stl_created:
                 self.logger.info("Created lithophane STL: %s", stl_path)
+                _log_generic_3mf(self.logger, stl_result, paths)
                 self.logger.info("Created mesh report: %s", mesh_report_path)
+            if preview_path.exists():
+                self.logger.info("Created preview: %s", preview_path)
+            return stl_created
+
+        if self.config.stl.product_mode == "filament_swap_relief":
+            _emit(stage_callback, "Cleanup Lab", "done", "Cleanup presets ignored for filament swaps", image_path)
+            _emit(stage_callback, "Detail Analyzer", "active", "Detecting printable color groups", image_path)
+            stl_created = False
+            try:
+                _emit(stage_callback, "Mesh Forge", "active", "Generating filament swap heightfield", image_path)
+                stl_result, filament_swap_metadata = create_filament_swap_relief_stl(
+                    image_path,
+                    stl_path,
+                    self.config.filament_swap_relief,
+                    preview_path=preview_path,
+                    cleaned_png_path=cleaned_png_path,
+                    silhouette_png_path=silhouette_png_path,
+                    color_preview_path=paths.previews_dir / f"{image_path.stem}_filament_colors.png",
+                    height_preview_path=paths.previews_dir / f"{image_path.stem}_filament_height_map.png",
+                    contact_sheet_path=paths.previews_dir / f"{image_path.stem}_filament_swap_preview.png",
+                    island_detected_preview_path=paths.previews_dir / f"{image_path.stem}_filament_islands_detected.png",
+                    island_actions_preview_path=paths.previews_dir / f"{image_path.stem}_filament_islands_actions.png",
+                    island_preserved_preview_path=paths.previews_dir / f"{image_path.stem}_filament_islands_preserved.png",
+                    island_removed_preview_path=paths.previews_dir / f"{image_path.stem}_filament_islands_removed.png",
+                    island_merged_preview_path=paths.previews_dir / f"{image_path.stem}_filament_islands_merged.png",
+                    island_connected_preview_path=paths.previews_dir / f"{image_path.stem}_filament_islands_connected.png",
+                    report_path=paths.filament_swap_report_path,
+                    color_plan_path=paths.color_plan_path,
+                    filament_swap_plan_path=paths.filament_swap_plan_path,
+                    generic_3mf_path=paths.generic_3mf_path,
+                )
+                for warning in filament_swap_metadata.get("warnings") or []:
+                    if warning not in warnings:
+                        warnings.append(warning)
+                        self.logger.warning(warning)
+                _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
+                _emit(stage_callback, "Detail Analyzer", "done", "Color height plan prepared", cleaned_png_path)
+                _emit(stage_callback, "Vector Workshop", "done", "SVG not applicable for filament swaps", None)
+                self.logger.info("Filament swap backend used: %s", stl_result.actual_backend)
+                mesh_report = validate_stl_mesh(
+                    stl_path,
+                    requested_backend=stl_result.requested_backend,
+                    actual_backend=stl_result.actual_backend,
+                    fallback_reason=stl_result.fallback_reason,
+                )
+                write_mesh_report(mesh_report, mesh_report_path)
+                if mesh_report.failures:
+                    failures.extend(mesh_report.failures)
+                    for failure in mesh_report.failures:
+                        self.logger.error("Mesh validation failure: %s", failure)
+                    _emit(stage_callback, "Mesh Forge", "failed", f"Mesh report: {mesh_report_path}", mesh_report_path)
+                elif mesh_report.warnings:
+                    warnings.extend(mesh_report.warnings)
+                    for warning in mesh_report.warnings:
+                        self.logger.warning("Mesh validation warning: %s", warning)
+                    _emit(stage_callback, "Mesh Forge", "done", f"STL created with warnings: {mesh_report_path}", stl_path)
+                else:
+                    _emit(stage_callback, "Mesh Forge", "done", "Filament swap STL created", stl_path)
+                stl_created = not mesh_report.failures
+                _emit(stage_callback, "Render Bay", "done", "Swap preview rendered", preview_path)
+            except (UnidentifiedImageError, OSError) as error:
+                failures.append(f"Skipped invalid filament swap image: {error}")
+                self.logger.warning("Skipped invalid filament swap image %s: %s", image_path, error)
+                _emit(stage_callback, "Mesh Forge", "failed", "Invalid filament swap image", None)
+            except Exception as error:
+                failures.append(f"Failed to generate filament swap STL: {error}")
+                self.logger.exception("Failed to generate filament swap STL for image: %s", image_path)
+                _emit(stage_callback, "Mesh Forge", "failed", "Filament swap STL generation failed", None)
+
+            _write_job_settings(settings_path, self.config)
+            write_job_status()
+            _emit(stage_callback, "Output Vault", "done", "Files saved to job folder", preview_path)
+            if stl_created:
+                self.logger.info("Created filament swap STL: %s", stl_path)
+                self.logger.info("Created mesh report: %s", mesh_report_path)
+                self.logger.info("Created filament swap report: %s", paths.filament_swap_report_path)
+                self.logger.info("Created color plan: %s", paths.color_plan_path)
+                self.logger.info("Created filament swap plan: %s", paths.filament_swap_plan_path)
+                if filament_swap_metadata.get("generic_3mf_created"):
+                    self.logger.info("Created generic 3MF: %s", paths.generic_3mf_path)
             if preview_path.exists():
                 self.logger.info("Created preview: %s", preview_path)
             return stl_created
@@ -272,7 +360,8 @@ class ImagePipeline:
         stl_created = False
         try:
             _emit(stage_callback, "Mesh Forge", "active", "Generating printable mesh", svg_path)
-            stl_result = create_relief_stl(analysis, stl_path, self.config.stl)
+            stl_result = create_relief_stl(analysis, stl_path, self.config.stl, generic_3mf_path=paths.generic_3mf_path)
+            _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
             self.logger.info("STL backend requested: %s", stl_result.requested_backend)
             self.logger.info("STL backend used: %s", stl_result.actual_backend)
             if stl_result.fallback_used:
@@ -331,6 +420,7 @@ class ImagePipeline:
         self.logger.info("Created review SVG: %s", review_svg_path)
         if stl_created:
             self.logger.info("Created STL: %s", stl_path)
+            _log_generic_3mf(self.logger, stl_result, paths)
             self.logger.info("Created mesh report: %s", mesh_report_path)
         self.logger.info("Created preview: %s", preview_path)
         return stl_created
@@ -339,6 +429,27 @@ class ImagePipeline:
 def _emit(callback: StageCallback | None, room: str, state: str, message: str, thumbnail: Path | None) -> None:
     if callback is not None:
         callback(room, state, message, thumbnail)
+
+
+def _append_generic_3mf_warnings(warnings: list[str], metadata: dict[str, Any] | None) -> None:
+    if not metadata or not metadata.get("generic_3mf_enabled"):
+        return
+    if metadata.get("generic_3mf_created"):
+        return
+    validation_errors = metadata.get("generic_3mf_validation_errors") or []
+    message = "Generic 3MF export failed"
+    if validation_errors:
+        message += ": " + "; ".join(str(error) for error in validation_errors)
+    if message not in warnings:
+        warnings.append(message)
+
+
+def _log_generic_3mf(logger: logging.Logger, stl_result: StlCreationResult | None, paths: JobOutputPaths) -> None:
+    metadata = (stl_result.generic_3mf_metadata if stl_result else {}) or {}
+    if metadata.get("generic_3mf_created"):
+        logger.info("Created generic 3MF: %s", paths.generic_3mf_path)
+    elif metadata.get("generic_3mf_enabled"):
+        logger.warning("Generic 3MF export failed: %s", "; ".join(metadata.get("generic_3mf_validation_errors") or []))
 
 
 def _write_job_settings(path: Path, config: AppConfig) -> None:
@@ -359,6 +470,32 @@ def _write_job_settings(path: Path, config: AppConfig) -> None:
         f"  lithophane_max_thickness_mm: {config.stl.lithophane_max_thickness_mm}",
         f"  lithophane_invert: {str(config.stl.lithophane_invert).lower()}",
         f"  lithophane_max_pixels: {config.stl.lithophane_max_pixels}",
+        f"  lithophane_autocontrast_enabled: {str(config.stl.lithophane_autocontrast_enabled).lower()}",
+        f"  lithophane_autocontrast_cutoff_percent: {config.stl.lithophane_autocontrast_cutoff_percent}",
+        f"  lithophane_contrast: {config.stl.lithophane_contrast}",
+        f"  lithophane_gamma: {config.stl.lithophane_gamma}",
+        f"  lithophane_sharpen_strength: {config.stl.lithophane_sharpen_strength}",
+        f"  lithophane_denoise_radius_px: {config.stl.lithophane_denoise_radius_px}",
+        f"  filament_swap_width_mm: {config.filament_swap_relief.width_mm}",
+        f"  filament_swap_color_count: {config.filament_swap_relief.color_count}",
+        f"  filament_swap_base_height_mm: {config.filament_swap_relief.base_height_mm}",
+        f"  filament_swap_layer_step_mm: {config.filament_swap_relief.layer_step_mm}",
+        f"  filament_swap_first_layer_height_mm: {config.filament_swap_relief.first_layer_height_mm}",
+        f"  filament_swap_layer_height_mm: {config.filament_swap_relief.layer_height_mm}",
+        f"  filament_swap_height_alignment_mode: {config.filament_swap_relief.height_alignment_mode}",
+        f"  filament_swap_height_alignment_tolerance_mm: {config.filament_swap_relief.height_alignment_tolerance_mm}",
+        f"  filament_swap_auto_background_ignore: {str(config.filament_swap_relief.auto_background_ignore).lower()}",
+        f"  filament_swap_min_region_area_px: {config.filament_swap_relief.min_region_area_px}",
+        f"  filament_swap_palette_color_space: {config.filament_swap_relief.palette_color_space}",
+        f"  filament_swap_palette_random_seed: {config.filament_swap_relief.palette_random_seed}",
+        f"  filament_swap_background_confidence_threshold: {config.filament_swap_relief.background_confidence_threshold}",
+        f"  filament_swap_island_policy: {config.filament_swap_relief.island_policy}",
+        f"  filament_swap_island_merge_max_distance_px: {config.filament_swap_relief.island_merge_max_distance_px}",
+        f"  filament_swap_island_merge_fallback: {config.filament_swap_relief.island_merge_fallback}",
+        f"  filament_swap_island_connect_max_gap_px: {config.filament_swap_relief.island_connect_max_gap_px}",
+        f"  filament_swap_island_connection_width_px: {config.filament_swap_relief.island_connection_width_px}",
+        f"  filament_swap_island_connect_fallback: {config.filament_swap_relief.island_connect_fallback}",
+        "  generic_3mf_export: automatic",
         "analysis:",
         f"  threshold_value: {config.silhouette.threshold_value}",
         f"  smoothing_strength: {config.silhouette.smoothing_strength}",
@@ -413,11 +550,13 @@ def _write_job_status(
     failures: list[str],
     artifact_summary: dict[str, Any],
     lithophane_metadata: dict[str, Any] | None,
+    filament_swap_metadata: dict[str, Any] | None,
     started_at: datetime,
     finished_at: datetime,
     duration_seconds: float,
 ) -> dict[str, Any]:
-    svg_applicable = config.stl.product_mode != "lithophane"
+    svg_applicable = config.stl.product_mode not in {"lithophane", "filament_swap_relief"}
+    generic_3mf_summary = _generic_3mf_status_summary(stl_result, lithophane_metadata, filament_swap_metadata)
     payload = {
         "app_version": _load_app_version(config.project_root),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -431,6 +570,7 @@ def _write_job_status(
         "source_folder_path": str(paths.source_dir),
         "svg_folder_path": str(paths.svg_dir),
         "stl_folder_path": str(paths.stl_dir),
+        "three_mf_folder_path": str(paths.three_mf_dir),
         "previews_folder_path": str(paths.previews_dir),
         "reports_folder_path": str(paths.reports_dir),
         "source_copy_path": str(paths.source_copy_path),
@@ -444,11 +584,15 @@ def _write_job_status(
         "svg_path": str(paths.svg_path) if svg_applicable else "",
         "review_svg_path": str(paths.review_svg_path) if svg_applicable else "",
         "stl_path": str(paths.stl_path),
+        "generic_3mf_path": generic_3mf_summary.get("generic_3mf_path", "") if generic_3mf_summary.get("generic_3mf_created") else "",
         "mesh_report_path": str(paths.mesh_report_path),
         "job_status_path": str(paths.job_status_path),
         "job_summary_path": str(paths.job_summary_path),
+        "filament_swap_report_path": str(paths.filament_swap_report_path) if filament_swap_metadata else "",
+        "color_plan_path": str(paths.color_plan_path) if filament_swap_metadata else "",
+        "filament_swap_plan_path": str(paths.filament_swap_plan_path) if filament_swap_metadata else "",
         "geometry_report_path": str(paths.geometry_report_path),
-        "requested_backend": stl_result.requested_backend if stl_result else config.stl.stl_backend,
+        "requested_backend": stl_result.requested_backend if stl_result else _requested_backend_for_status(config),
         "actual_backend": stl_result.actual_backend if stl_result else "",
         "fallback_used": stl_result.fallback_used if stl_result else False,
         "fallback_reason": stl_result.fallback_reason if stl_result else "",
@@ -466,17 +610,42 @@ def _write_job_status(
             "lithophane_max_thickness_mm": config.stl.lithophane_max_thickness_mm,
             "lithophane_invert": config.stl.lithophane_invert,
             "lithophane_max_pixels": config.stl.lithophane_max_pixels,
+            "lithophane_autocontrast_enabled": config.stl.lithophane_autocontrast_enabled,
+            "lithophane_autocontrast_cutoff_percent": config.stl.lithophane_autocontrast_cutoff_percent,
+            "lithophane_contrast": config.stl.lithophane_contrast,
+            "lithophane_gamma": config.stl.lithophane_gamma,
+            "lithophane_sharpen_strength": config.stl.lithophane_sharpen_strength,
+            "lithophane_denoise_radius_px": config.stl.lithophane_denoise_radius_px,
+            "filament_swap_width_mm": config.filament_swap_relief.width_mm,
+            "filament_swap_color_count": config.filament_swap_relief.color_count,
+            "filament_swap_base_height_mm": config.filament_swap_relief.base_height_mm,
+            "filament_swap_layer_step_mm": config.filament_swap_relief.layer_step_mm,
+            "filament_swap_first_layer_height_mm": config.filament_swap_relief.first_layer_height_mm,
+            "filament_swap_layer_height_mm": config.filament_swap_relief.layer_height_mm,
+            "filament_swap_height_alignment_mode": config.filament_swap_relief.height_alignment_mode,
+            "filament_swap_height_alignment_tolerance_mm": config.filament_swap_relief.height_alignment_tolerance_mm,
+            "filament_swap_palette_color_space": config.filament_swap_relief.palette_color_space,
+            "filament_swap_palette_random_seed": config.filament_swap_relief.palette_random_seed,
+            "filament_swap_background_confidence_threshold": config.filament_swap_relief.background_confidence_threshold,
+            "filament_swap_island_policy": config.filament_swap_relief.island_policy,
+            "filament_swap_island_merge_max_distance_px": config.filament_swap_relief.island_merge_max_distance_px,
+            "filament_swap_island_connect_max_gap_px": config.filament_swap_relief.island_connect_max_gap_px,
+            "filament_swap_island_connection_width_px": config.filament_swap_relief.island_connection_width_px,
+            "generic_3mf_export": "automatic",
         },
         "settings_used": {
             "pipeline": asdict(config.pipeline),
             "silhouette": asdict(config.silhouette),
             "svg": asdict(config.svg),
             "stl": asdict(config.stl),
+            "filament_swap_relief": asdict(config.filament_swap_relief),
         },
         "warnings": warnings,
         "failures": failures,
         "artifact_summary": artifact_summary,
         "lithophane_summary": lithophane_metadata or {},
+        "filament_swap_summary": _filament_swap_status_summary(filament_swap_metadata),
+        "generic_3mf_summary": generic_3mf_summary,
         "mesh_summary": _mesh_summary(mesh_report),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -487,6 +656,8 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
     mesh = status.get("mesh_summary") or {}
     artifact = status.get("artifact_summary") or {}
     lithophane = status.get("lithophane_summary") or {}
+    filament_swap = status.get("filament_swap_summary") or {}
+    generic_3mf = status.get("generic_3mf_summary") or {}
     warnings = status.get("warnings") or []
     failures = status.get("failures") or []
     if failures:
@@ -514,6 +685,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Source: `{status.get('source_folder_path', '')}`",
         f"- SVG: `{status.get('svg_folder_path', '')}`",
         f"- STL: `{status.get('stl_folder_path', '')}`",
+        f"- 3MF: `{status.get('three_mf_folder_path', '')}`",
         f"- Previews: `{status.get('previews_folder_path', '')}`",
         f"- Reports: `{status.get('reports_folder_path', '')}`",
         "",
@@ -522,10 +694,14 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- SVG: `{status.get('svg_path', '')}`",
         f"- Review SVG: `{status.get('review_svg_path', '')}`",
         f"- STL: `{status.get('stl_path', '')}`",
+        f"- Generic 3MF: `{status.get('generic_3mf_path', '')}`",
         f"- Preview: `{status.get('preview_path', '')}`",
         f"- Mesh report: `{status.get('mesh_report_path', '')}`",
         f"- Job status: `{status.get('job_status_path', '')}`",
         f"- Job summary: `{status.get('job_summary_path', '')}`",
+        f"- Filament swap report: `{status.get('filament_swap_report_path', '')}`",
+        f"- Color plan: `{status.get('color_plan_path', '')}`",
+        f"- Filament swap plan: `{status.get('filament_swap_plan_path', '')}`",
         "",
         "## Mesh",
         f"- Requested backend: `{status.get('requested_backend', '')}`",
@@ -535,6 +711,16 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Watertight: `{mesh.get('watertight', '')}`",
         f"- Face count: `{mesh.get('face_count', '')}`",
         f"- Bounds mm: `{mesh.get('bounding_box_mm', '')}`",
+        "",
+        "## Generic 3MF Export",
+        f"- Export: `automatic`",
+        f"- Created: `{generic_3mf.get('generic_3mf_created', False)}`",
+        f"- Path: `{generic_3mf.get('generic_3mf_path', '')}`",
+        f"- Validation passed: `{generic_3mf.get('generic_3mf_validation_passed', False)}`",
+        f"- Units: `{generic_3mf.get('generic_3mf_units', '')}`",
+        f"- Bounds mm: `{generic_3mf.get('generic_3mf_bounds', '')}`",
+        f"- Bounds match STL mesh: `{generic_3mf.get('bounds_match', False)}`",
+        f"- Notice: {generic_3mf.get('generic_export_notice', '')}",
         "",
         "## Artwork Cleanup",
         f"- Isolated islands: `{artifact.get('isolated_island_count', 0)}`",
@@ -560,6 +746,98 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
                 "",
             ]
         )
+        preprocessing = lithophane.get("preprocessing") or {}
+        if preprocessing:
+            lines.extend(
+                [
+                    "## Lithophane Crispness",
+                    f"- Autocontrast: `{preprocessing.get('autocontrast_enabled', False)}`",
+                    f"- Autocontrast cutoff percent: `{preprocessing.get('autocontrast_cutoff_percent', '')}`",
+                    f"- Contrast: `{preprocessing.get('contrast', '')}`",
+                    f"- Gamma: `{preprocessing.get('gamma', '')}`",
+                    f"- Sharpen strength: `{preprocessing.get('sharpen_strength', '')}`",
+                    f"- Denoise radius px: `{preprocessing.get('denoise_radius_px', '')}`",
+                    f"- Processed preview: `{preprocessing.get('processed_preview_path', '')}`",
+                    "",
+                ]
+            )
+    if filament_swap:
+        lines.extend(
+            [
+                "## Filament Swap Relief",
+                f"- Backend: `{filament_swap.get('backend', '')}`",
+                f"- Requested colors: `{filament_swap.get('color_count_requested', '')}`",
+                f"- Kept colors: `{filament_swap.get('color_count_kept', '')}`",
+                f"- Ignored background: `{filament_swap.get('ignored_background_color_hex', '')}`",
+                f"- Palette color space: `{filament_swap.get('palette_color_space', '')}`",
+                f"- Color order: `{filament_swap.get('color_order', '')}`",
+                f"- Sampled pixels: `{filament_swap.get('sampled_width_px', '')}x{filament_swap.get('sampled_height_px', '')}`",
+                f"- Downscaled: `{filament_swap.get('source_downscaled', False)}`",
+                f"- Final height mm: `{filament_swap.get('final_height_mm', '')}`",
+                f"- Final top layer: `{filament_swap.get('final_top_layer', '')}`",
+                f"- Total printed layers: `{filament_swap.get('total_printed_layers', '')}`",
+                f"- Snapping occurred: `{filament_swap.get('snapping_occurred', False)}`",
+                "",
+                "## Filament Island Handling",
+            ]
+        )
+        island_summary = filament_swap.get("island_summary") or {}
+        lines.extend(
+            [
+                f"- Policy: `{island_summary.get('island_policy', '')}`",
+                f"- Min region area px: `{island_summary.get('min_region_area_px', '')}`",
+                f"- Detected components: `{island_summary.get('total_detected_components', '')}`",
+                f"- Preserved components: `{island_summary.get('intentionally_preserved_components', '')}`",
+                f"- Removed components: `{island_summary.get('removed_components', '')}`",
+                f"- Merged components: `{island_summary.get('merged_components', '')}`",
+                f"- Connected components: `{island_summary.get('connected_components', '')}`",
+                f"- Pixels removed: `{island_summary.get('pixels_removed', '')}`",
+                f"- Pixels recolored: `{island_summary.get('pixels_recolored', '')}`",
+                f"- Connector pixels added: `{island_summary.get('connector_pixels_added', '')}`",
+                "",
+                "## Filament Swap Plan",
+            ]
+        )
+        swap_summary = filament_swap.get("swap_plan_summary") or {}
+        layer_settings = swap_summary.get("layer_settings") or {}
+        lines.extend(
+            [
+                "Layer numbering: one-based.",
+                "Swap convention: Change before layer N means finish layer N-1, pause, load the new filament, and print layer N.",
+                f"- First layer height: `{layer_settings.get('first_layer_height_mm', '')} mm`",
+                f"- Normal layer height: `{layer_settings.get('layer_height_mm', '')} mm`",
+                f"- Alignment mode: `{layer_settings.get('height_alignment_mode', '')}`",
+                f"- Color plan: `{status.get('color_plan_path', '')}`",
+                f"- Text swap plan: `{status.get('filament_swap_plan_path', '')}`",
+                "",
+            ]
+        )
+        detected_colors = (swap_summary.get("colors") or filament_swap.get("detected_colors") or [])
+        for color in detected_colors:
+            if color.get("order", color.get("index")) == 1:
+                lines.append(
+                    f"- Start with `{color.get('hex', '')}` / {color.get('suggested_color_name', 'color')}, "
+                    f"layers `{color.get('first_layer_using_color', '')}` through `{color.get('last_layer_using_color', '')}` "
+                    f"to `{color.get('aligned_top_z_mm', color.get('assigned_height_mm', ''))} mm`"
+                )
+            else:
+                lines.append(
+                    f"- Change before layer `{color.get('change_before_layer', '')}` to `{color.get('hex', '')}` / "
+                    f"{color.get('suggested_color_name', 'color')}; transition Z "
+                    f"`{color.get('aligned_start_z_mm', color.get('filament_change_at_mm', ''))} mm`; "
+                    f"previous filament last layer `{color.get('previous_filament_last_layer', '')}`"
+                )
+        lines.extend(
+            [
+                f"- Final height: `{filament_swap.get('final_height_mm', '')} mm`",
+                "",
+            ]
+        )
+    validation_errors = generic_3mf.get("generic_3mf_validation_errors") or []
+    if validation_errors:
+        lines.extend(["## Generic 3MF Validation Errors"])
+        lines.extend(f"- {error}" for error in validation_errors)
+        lines.append("")
     lines.extend(
         [
         "## Review",
@@ -578,7 +856,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
 
 
 def _artifact_summary(analysis: Any | None, config: AppConfig) -> dict[str, Any]:
-    if config.stl.product_mode == "lithophane":
+    if config.stl.product_mode in {"lithophane", "filament_swap_relief"}:
         return {
             "cleanup_preset": "not_applicable",
             "cleanup_presets_ignored": True,
@@ -590,6 +868,14 @@ def _artifact_summary(analysis: Any | None, config: AppConfig) -> dict[str, Any]
     if analysis is None:
         return {}
     return asdict(analysis.artifact_report)
+
+
+def _requested_backend_for_status(config: AppConfig) -> str:
+    if config.stl.product_mode == "lithophane":
+        return "lithophane_heightfield"
+    if config.stl.product_mode == "filament_swap_relief":
+        return FILAMENT_SWAP_BACKEND
+    return config.stl.stl_backend
 
 
 def _mesh_summary(mesh_report: MeshReport | None) -> dict[str, Any]:
@@ -610,6 +896,42 @@ def _mesh_summary(mesh_report: MeshReport | None) -> dict[str, Any]:
         "warnings": mesh_report.warnings,
         "failures": mesh_report.failures,
     }
+
+
+def _generic_3mf_status_summary(
+    stl_result: StlCreationResult | None,
+    lithophane_metadata: dict[str, Any] | None,
+    filament_swap_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source = (stl_result.generic_3mf_metadata if stl_result else None) or {}
+    if not source and filament_swap_metadata:
+        source = filament_swap_metadata
+    if not source and lithophane_metadata:
+        source = lithophane_metadata
+    if not source:
+        return {}
+    keys = {
+        "generic_3mf_enabled",
+        "generic_3mf_created",
+        "generic_3mf_path",
+        "generic_3mf_validation_passed",
+        "generic_3mf_validation_errors",
+        "generic_3mf_units",
+        "generic_3mf_bounds",
+        "source_mesh_bounds",
+        "bounds_match",
+        "archive_entries",
+        "generic_3mf_exporter_version",
+        "generic_export_notice",
+    }
+    return {key: source.get(key) for key in keys if key in source}
+
+
+def _filament_swap_status_summary(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not metadata:
+        return {}
+    omitted = {"component_actions", "color_plan"}
+    return {key: value for key, value in metadata.items() if key not in omitted}
 
 
 def _load_app_version(project_root: Path) -> str:

@@ -121,11 +121,46 @@ class StlConfig:
     lithophane_max_thickness_mm: float
     lithophane_invert: bool
     lithophane_max_pixels: int
+    lithophane_autocontrast_enabled: bool
+    lithophane_autocontrast_cutoff_percent: float
+    lithophane_contrast: float
+    lithophane_gamma: float
+    lithophane_sharpen_strength: float
+    lithophane_denoise_radius_px: int
 
 
 @dataclass(frozen=True)
 class PreviewConfig:
     image_size_px: int
+
+
+@dataclass(frozen=True)
+class FilamentSwapReliefConfig:
+    width_mm: float
+    color_count: int
+    base_height_mm: float
+    layer_step_mm: float
+    first_layer_height_mm: float
+    layer_height_mm: float
+    height_alignment_mode: str
+    height_alignment_tolerance_mm: float
+    auto_background_ignore: bool
+    background_border_sample_px: int
+    background_confidence_threshold: float
+    max_sampled_pixels: int
+    min_region_area_px: int
+    smooth_edges: bool
+    edge_smoothing_px: int
+    color_order: str
+    palette_color_space: str
+    palette_random_seed: int
+    island_policy: str
+    island_merge_max_distance_px: int
+    island_merge_fallback: str
+    island_connect_max_gap_px: int
+    island_connection_width_px: int
+    island_connect_fallback: str
+    island_report_components: bool
 
 
 @dataclass(frozen=True)
@@ -139,6 +174,7 @@ class AppConfig:
     silhouette: SilhouetteConfig
     svg: SvgConfig
     stl: StlConfig
+    filament_swap_relief: FilamentSwapReliefConfig
     preview: PreviewConfig
 
 
@@ -167,6 +203,7 @@ def load_config(config_path: Path) -> AppConfig:
         silhouette=_silhouette_config(raw_config.get("silhouette", {})),
         svg=_svg_config(raw_config.get("svg", {})),
         stl=_stl_config(raw_config.get("stl", {})),
+        filament_swap_relief=_filament_swap_relief_config(raw_config.get("filament_swap_relief", {})),
         preview=_preview_config(raw_config.get("preview", {})),
     )
 
@@ -362,6 +399,21 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
             island_near_body_distance_px=max(config.island_near_body_distance_px, 10.0),
             preserve_internal_details=True,
         )
+    if cleanup_preset == "preserve_floating_islands":
+        return replace(
+            config,
+            remove_small_islands=False,
+            min_island_area_px=0.0,
+            min_contour_area=0.0,
+            simplify_tolerance=0.0,
+            preserve_islands_near_body=True,
+            island_near_body_distance_px=0.0,
+            preserve_holes=True,
+            preserve_internal_details=True,
+            contour_smoothing_enabled=False,
+            straight_line_cleanup_enabled=False,
+            curve_fit_enabled=False,
+        )
     return config
 
 
@@ -379,6 +431,8 @@ def normalize_cleanup_preset(value: str | None) -> str:
         return "splatter_logo"
     if normalized in {"detail", "detail_preserve", "detail_preserving"}:
         return "detail_preserving"
+    if normalized in {"preserve_floating", "preserve_floating_islands", "floating_islands", "preserve_all_islands"}:
+        return "preserve_floating_islands"
     return "default"
 
 
@@ -434,8 +488,127 @@ def _stl_config(value: dict[str, Any]) -> StlConfig:
         lithophane_max_thickness_mm=float(value.get("lithophane_max_thickness_mm", 3.0)),
         lithophane_invert=bool(value.get("lithophane_invert", False)),
         lithophane_max_pixels=int(value.get("lithophane_max_pixels", 60000)),
+        lithophane_autocontrast_enabled=bool(value.get("lithophane_autocontrast_enabled", False)),
+        lithophane_autocontrast_cutoff_percent=float(value.get("lithophane_autocontrast_cutoff_percent", 0.5)),
+        lithophane_contrast=float(value.get("lithophane_contrast", 1.0)),
+        lithophane_gamma=float(value.get("lithophane_gamma", 1.0)),
+        lithophane_sharpen_strength=float(value.get("lithophane_sharpen_strength", 0.0)),
+        lithophane_denoise_radius_px=int(value.get("lithophane_denoise_radius_px", 0)),
     )
 
 
 def _preview_config(value: dict[str, Any]) -> PreviewConfig:
     return PreviewConfig(image_size_px=int(value.get("image_size_px", 1200)))
+
+
+def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefConfig:
+    height_alignment_mode = _choice(
+        value.get("height_alignment_mode", "snap_up"),
+        "snap_up",
+        {"snap_up", "snap_nearest", "strict"},
+        "filament_swap_relief.height_alignment_mode",
+    )
+    first_layer_height_mm = _positive_float(
+        value.get("first_layer_height_mm", 0.20),
+        "filament_swap_relief.first_layer_height_mm",
+    )
+    layer_height_mm = _positive_float(
+        value.get("layer_height_mm", 0.20),
+        "filament_swap_relief.layer_height_mm",
+    )
+    height_alignment_tolerance_mm = _nonnegative_float(
+        value.get("height_alignment_tolerance_mm", 0.001),
+        "filament_swap_relief.height_alignment_tolerance_mm",
+    )
+    if height_alignment_tolerance_mm >= min(first_layer_height_mm, layer_height_mm) / 2.0:
+        raise ValueError("filament_swap_relief.height_alignment_tolerance_mm must be smaller than half of the layer heights.")
+    island_policy = _choice(
+        value.get("island_policy", "remove_below_threshold"),
+        "remove_below_threshold",
+        {"preserve_all", "remove_below_threshold", "merge_with_nearest_region", "connect_within_maximum_gap"},
+        "filament_swap_relief.island_policy",
+    )
+    merge_fallback = _choice(
+        value.get("island_merge_fallback", "remove"),
+        "remove",
+        {"remove", "preserve"},
+        "filament_swap_relief.island_merge_fallback",
+    )
+    connect_fallback = _choice(
+        value.get("island_connect_fallback", "remove"),
+        "remove",
+        {"remove", "preserve"},
+        "filament_swap_relief.island_connect_fallback",
+    )
+    return FilamentSwapReliefConfig(
+        width_mm=float(value.get("width_mm", 120.0)),
+        color_count=int(value.get("color_count", 3)),
+        base_height_mm=_positive_float(value.get("base_height_mm", 0.8), "filament_swap_relief.base_height_mm"),
+        layer_step_mm=_positive_float(value.get("layer_step_mm", 0.4), "filament_swap_relief.layer_step_mm"),
+        first_layer_height_mm=first_layer_height_mm,
+        layer_height_mm=layer_height_mm,
+        height_alignment_mode=height_alignment_mode,
+        height_alignment_tolerance_mm=height_alignment_tolerance_mm,
+        auto_background_ignore=bool(value.get("auto_background_ignore", True)),
+        background_border_sample_px=int(value.get("background_border_sample_px", 12)),
+        background_confidence_threshold=_nonnegative_float(
+            value.get("background_confidence_threshold", 0.45),
+            "filament_swap_relief.background_confidence_threshold",
+        ),
+        max_sampled_pixels=int(value.get("max_sampled_pixels", 90000)),
+        min_region_area_px=_nonnegative_int(value.get("min_region_area_px", 30), "filament_swap_relief.min_region_area_px"),
+        smooth_edges=bool(value.get("smooth_edges", True)),
+        edge_smoothing_px=_nonnegative_int(value.get("edge_smoothing_px", 1), "filament_swap_relief.edge_smoothing_px"),
+        color_order=str(value.get("color_order", "light_to_dark")),
+        palette_color_space=_choice(
+            value.get("palette_color_space", "rgb"),
+            "rgb",
+            {"rgb", "lab"},
+            "filament_swap_relief.palette_color_space",
+        ),
+        palette_random_seed=int(value.get("palette_random_seed", 17)),
+        island_policy=island_policy,
+        island_merge_max_distance_px=_nonnegative_int(
+            value.get("island_merge_max_distance_px", 8),
+            "filament_swap_relief.island_merge_max_distance_px",
+        ),
+        island_merge_fallback=merge_fallback,
+        island_connect_max_gap_px=_nonnegative_int(
+            value.get("island_connect_max_gap_px", 3),
+            "filament_swap_relief.island_connect_max_gap_px",
+        ),
+        island_connection_width_px=max(
+            1,
+            _nonnegative_int(value.get("island_connection_width_px", 1), "filament_swap_relief.island_connection_width_px"),
+        ),
+        island_connect_fallback=connect_fallback,
+        island_report_components=bool(value.get("island_report_components", True)),
+    )
+
+
+def _choice(value: Any, default: str, allowed: set[str], name: str) -> str:
+    selected = str(value if value is not None else default).strip().lower().replace(" ", "_").replace("-", "_")
+    if selected not in allowed:
+        raise ValueError(f"{name} must be one of {sorted(allowed)}; got {value!r}.")
+    return selected
+
+
+def _nonnegative_int(value: Any, name: str) -> int:
+    selected = int(value)
+    if selected < 0:
+        raise ValueError(f"{name} must be nonnegative; got {value!r}.")
+    return selected
+
+
+def _nonnegative_float(value: Any, name: str) -> float:
+    selected = float(value)
+    if selected < 0:
+        raise ValueError(f"{name} must be nonnegative; got {value!r}.")
+    return selected
+
+
+def _positive_float(value: Any, name: str) -> float:
+    selected = float(value)
+    if selected <= 0:
+        raise ValueError(f"{name} must be greater than zero; got {value!r}.")
+    return selected

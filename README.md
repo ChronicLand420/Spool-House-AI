@@ -17,9 +17,9 @@ Created by ChronicLand420.
    - `keychain`
    - `wall_art`
    - `lithophane` (experimental)
-8. Save cleaned PNG, silhouette PNG, SVG, STL, final preview, and stage previews.
+8. Save cleaned PNG, silhouette PNG, SVG, STL, generic 3MF, final preview, and stage previews.
 
-Future features such as AI image generation, Blender automation, mesh repair, dashboard, queueing, database, upload packages, and slicer integrations are intentionally not implemented yet.
+Future features such as AI image generation, Blender automation, mesh repair, dashboard, queueing, database, upload packages, slicer project generation, automatic slicing, and G-code export are intentionally not implemented yet.
 
 ## Desktop App
 
@@ -47,9 +47,12 @@ The app supports:
 - Watch rooms light up as stages run: Intake Room, Cleanup Lab, Detail Analyzer, Vector Workshop, Mesh Forge, Render Bay, and Output Vault.
 - See elapsed time, rough ETA, and batch item count in the status strip while jobs run.
 - Use `Output Vault` and `Production Review` to inspect generated files and preview thumbnails.
-- Open the output folder, STL, SVG, or preview after generation.
+- Use `Open in Slicer` after generation to open the validated generic 3MF when available, with STL fallback.
+- Open the output folder, STL, 3MF, SVG, or preview directly when you need a specific artifact.
 
-The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, and optional post-generation actions. The Spool House Orange accent uses the official logo orange while keeping the internal preference value `orange` for compatibility. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
+The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, slicer handoff preference, and optional post-generation actions. The Spool House Orange accent uses the official logo orange while keeping the internal preference value `orange` for compatibility. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
+
+`Open in Slicer` supports System default, OrcaSlicer, and Bambu Studio launch modes. It only opens the selected model file; it does not slice, export G-code, modify printer profiles, modify filament profiles, or inject filament-change markers. By default SHS prefers the validated generic 3MF and falls back to STL if the 3MF is unavailable or failed validation. Optional OrcaSlicer and Bambu Studio executable paths can be configured in Settings.
 
 The Settings/About area also has optional Support / Contact buttons. They are disabled until real links are configured in `spool_house_ai/app_identity.py` through `APP_SUPPORT_URL`, `APP_CONTACT_URL`, `APP_CONTACT_EMAIL`, or `APP_GITHUB_URL`. Donations are optional; the app has no ads, tracking, export limits, or paywall logic.
 
@@ -237,12 +240,39 @@ python -m spool_house_ai.main --once --product-mode keychain --threshold 145 --h
 - `keychain`: adds keychain-oriented thickness behavior and can add a configurable keyring loop/hole.
 - `wall_art`: creates a thicker display piece with stronger relief height.
 - `lithophane`: experimental flat lithophane panel that maps image brightness to plastic thickness.
+- `filament_swap_relief`: experimental stepped-height relief for manual filament swaps from flat color artwork.
 
 ### Lithophane (Experimental)
 
 Lithophane mode creates a flat rectangular STL from photo brightness instead of tracing logo contours. Bright or white pixels are thinner by default, and dark pixels are thicker, so the image reads correctly when backlit. Cleanup presets, SVG tracing, detail handling, and vector/raster backend choices do not apply to lithophane jobs.
 
+Lithophane crispness controls are available in Advanced Settings when Lithophane is selected. Defaults are intentionally neutral: autocontrast is off, contrast and gamma are `1.0`, sharpening is `0.0`, and denoise radius is `0`, so existing output stays close to previous behavior. Increase contrast or sharpening carefully for crisper details, use gamma to tune midtones, and use light denoise only when noisy photos create rough thickness changes. Lithophane jobs save a processed grayscale preview so you can inspect the exact image used for thickness mapping.
+
 This first version is intentionally simple: flat panels only, no curved lamp shades, no sockets, no stands, no color lithophanes, and no AI cleanup. It works best with clear, bright, high-contrast images. For printing, start with light-colored or white PLA and a small layer height, then verify orientation and exposure in your slicer.
+
+### Filament Swap Relief (Experimental)
+
+Filament Swap Relief turns flat color artwork into one solid stepped-height STL for manual filament changes. Each detected printable color becomes a different final height. By default, light colors print lower and dark colors print higher, so a three-color white/red/black design becomes roughly:
+
+- Start with the light color from `0.00 mm` to `0.80 mm`
+- Change before the layer that starts at `0.80 mm`
+- Change before the layer that starts at `1.20 mm`
+- Final height is `1.60 mm`
+
+This is a single solid layer-cake model, not true per-layer multicolor, G-code, MMU/AMS output, or separate STL files per color. It works best with clean logos, decals, signs, anime-style title art, and other flat-color artwork. Cleanup presets, SVG tracing, detail handling, and vector/raster backend choices do not apply to this mode. No AI is used. Use artwork you own or have permission to print.
+
+Manual swap planning is layer-aware. Set the first-layer height, normal layer height, and alignment mode in the Filament Swap Relief controls. Reports use one-based layer numbers: “Change before layer N” means finish layer `N-1`, pause the printer, load the next filament, and print layer `N` with the new filament. With default `0.20 mm` first/normal layers, the default `0.80 / 0.40 mm` heights remain unchanged. If custom heights do not land on real layer starts, Spool House Studio can snap them upward, snap to nearest, or reject them in strict mode.
+
+Filament Swap Relief has its own palette and island controls. RGB palette clustering remains the default for backward-compatible output, while LAB clustering can be selected experimentally for more perceptual color grouping. Island Handling controls what happens to disconnected color components after segmentation:
+
+- `preserve_all`: keeps every post-segmentation component and reports tiny pieces as intentionally preserved.
+- `remove_below_threshold`: default behavior; removes components smaller than `min_region_area_px`.
+- `merge_with_nearest_region`: reassigns small components to the nearest printable region using deterministic contact/distance rules.
+- `connect_within_maximum_gap`: connects small components to a same-color kept component when it is within the configured gap.
+
+Island handling cannot recover details already lost during downsampling, smoothing, palette clustering, or background removal. The reports distinguish those earlier steps from island actions. Filament jobs write island review previews such as `_filament_islands_detected.png`, `_filament_islands_actions.png`, and action-specific preserved/removed/merged/connected previews when those actions occur. Filament jobs also write `reports/color_plan.json` and `reports/filament_swap_plan.txt`, which contain the layer-aware manual swap plan used by the STL and generic 3MF geometry.
+
+Every successful STL job also writes `3mf/<stem>.3mf` as a minimal standards-compliant generic 3MF model. This 3MF keeps the same size, orientation, and geometry as the STL, but it is not an OrcaSlicer or Bambu Studio project and does not embed filament-change markers, printer profiles, process profiles, or G-code. For Filament Swap Relief, use the separate `reports/filament_swap_plan.txt` for manual filament-change instructions.
 
 ## Detail Modes
 
@@ -265,6 +295,8 @@ output/example/
     example_review.svg
   stl/
     example.stl
+  3mf/
+    example.3mf
   previews/
     example_cleaned.png
     example_silhouette.png
@@ -291,9 +323,13 @@ output/example/
 
 `example.svg` is the normal editable vector output. `example_review.svg` adds visible inspection layers for foreground/body contours, holes, preserved details, and ignored islands so the artwork is easier to inspect in Inkscape before STL export.
 
-For lithophane jobs, the same job folder structure is used, but SVG files are not created because lithophane output is generated from grayscale brightness. The STL, preview, mesh report, job status, and job summary are still written under `stl/`, `previews/`, and `reports/`.
+For lithophane jobs, the same job folder structure is used, but SVG files are not created because lithophane output is generated from grayscale brightness. The STL, generic 3MF, preview, mesh report, job status, and job summary are still written under `stl/`, `3mf/`, `previews/`, and `reports/`.
 
-The default output root is `output/`. In the GUI, use `Settings` -> `Output Folder` to choose a different root folder. New jobs still use the same per-image pattern, `<selected output root>/<input stem>/`, and then place files into the `source/`, `svg/`, `stl/`, `previews/`, and `reports/` subfolders. CLI runs continue to use `config/config.yaml` unless you change that config directly.
+Lithophane jobs also write `previews/<stem>_lithophane_processed.png`, which shows the grayscale image after any crispness preprocessing and before thickness mapping. `job_status.json` and `job_summary.md` record the Lithophane preprocessing settings; `mesh_report.json` remains focused only on mesh health.
+
+For Filament Swap Relief jobs, SVG files are also not created in this first version. Instead, previews include color-group and height-map images, `stl/<stem>.stl` contains the printable STL, `3mf/<stem>.3mf` contains the matching generic 3MF model, and `reports/filament_swap_report.json`, `reports/color_plan.json`, `reports/filament_swap_plan.txt`, and `job_summary.md` include the detected color order, aligned layer heights, and manual swap instructions. The generic 3MF is model geometry only; filament-change instructions remain separate.
+
+The default output root is `output/`. In the GUI, use `Settings` -> `Output Folder` to choose a different root folder. New jobs still use the same per-image pattern, `<selected output root>/<input stem>/`, and then place files into the `source/`, `svg/`, `stl/`, `3mf/`, `previews/`, and `reports/` subfolders. CLI runs continue to use `config/config.yaml` unless you change that config directly.
 
 The contour debug preview uses:
 
@@ -342,6 +378,39 @@ stl:
   lithophane_max_thickness_mm: 3.0
   lithophane_invert: false
   lithophane_max_pixels: 60000
+  lithophane_autocontrast_enabled: false
+  lithophane_autocontrast_cutoff_percent: 0.5
+  lithophane_contrast: 1.0
+  lithophane_gamma: 1.0
+  lithophane_sharpen_strength: 0.0
+  lithophane_denoise_radius_px: 0
+
+filament_swap_relief:
+  width_mm: 120.0
+  color_count: 3
+  base_height_mm: 0.8
+  layer_step_mm: 0.4
+  first_layer_height_mm: 0.20
+  layer_height_mm: 0.20
+  height_alignment_mode: snap_up
+  height_alignment_tolerance_mm: 0.001
+  auto_background_ignore: true
+  background_border_sample_px: 12
+  background_confidence_threshold: 0.45
+  max_sampled_pixels: 90000
+  min_region_area_px: 30
+  smooth_edges: true
+  edge_smoothing_px: 1
+  color_order: light_to_dark
+  palette_color_space: rgb
+  palette_random_seed: 17
+  island_policy: remove_below_threshold
+  island_merge_max_distance_px: 8
+  island_merge_fallback: remove
+  island_connect_max_gap_px: 3
+  island_connection_width_px: 1
+  island_connect_fallback: remove
+  island_report_components: true
 ```
 
 `stl_backend` supports:
@@ -362,8 +431,9 @@ The GUI exposes cleanup presets in the Presets panel:
 - `drip_logo`: removes far-away specks while preserving nearby drips, drops, and small detached logo pieces.
 - `splatter_logo`: preserves rough/splatter edges and near-body texture while still removing tiny isolated junk.
 - `line_art`: preserves long outline strokes, sneaker panels, coloring-page lines, tattoo-flash outlines, and clean interior linework while reducing far-away specks.
+- `preserve_floating_islands`: preserves intentional detached dots, stars, eye highlights, earrings, accents, and multipart artwork by disabling automatic island removal.
 
-Use Clean Logo when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use Line Art for sneaker outlines, coloring-page drawings, tattoo-flash style artwork, technical outlines, and artwork where interior strokes matter. Use Drip / Graffiti for drip marks where nearby drops are part of the design. Use Splatter / Rough for distressed or rough logos where edge texture matters. Avoid aggressive cleanup when detached dots are intentional details, such as stars, stippling, sparkles, distressed texture, or small decorative marks.
+Use Clean Logo when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use Line Art for sneaker outlines, coloring-page drawings, tattoo-flash style artwork, technical outlines, and artwork where interior strokes matter. Use Drip / Graffiti for drip marks where nearby drops are part of the design. Use Splatter / Rough for distressed or rough logos where edge texture matters. Use Preserve Floating Islands when detached dots are intentional details, such as stars, stippling, sparkles, distressed texture, eye highlights, earrings, or small decorative marks. For Filament Swap Relief, use `Island handling = Preserve all` instead of the Wall Art cleanup preset.
 
 Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export. `job_summary.md` is a short human-readable package summary for slicer/product review.
 
