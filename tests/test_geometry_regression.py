@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 
 from spool_house_ai.config import apply_cleanup_preset, load_config
 from spool_house_ai.processing.analysis import analyze_image
+from spool_house_ai.processing.geometry import extract_vector_contours
 from spool_house_ai.processing.generic_3mf import validate_generic_3mf
 from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh
 from spool_house_ai.test_mode import create_real_world_geometry_test_image
@@ -249,6 +250,69 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertEqual(report.failures, [])
 
+    def test_nested_contours_use_hierarchy_parity_for_holes(self) -> None:
+        mask = np.zeros((80, 80), dtype=bool)
+        mask[5:75, 5:75] = True
+        mask[20:60, 20:60] = False
+        mask[32:48, 32:48] = True
+        mask[38:42, 38:42] = False
+
+        contours, _ = extract_vector_contours(
+            mask,
+            min_area=1,
+            simplify_tolerance=0.0,
+            smoothing_enabled=False,
+            smoothing_strength=0,
+            collinear_merge_tolerance=0.0,
+            sharp_corner_angle_threshold=160.0,
+            straight_line_cleanup_enabled=False,
+            curve_fit_enabled=False,
+        )
+
+        self.assertEqual(sum(not contour.is_hole for contour in contours), 2)
+        self.assertEqual(sum(contour.is_hole for contour in contours), 2)
+
+    def test_vector_backend_handles_nested_island_inside_hole_without_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "nested_island.png"
+            output_mask = temp_path / "nested_island_silhouette.png"
+            stl_path = temp_path / "nested_island_vector.stl"
+
+            image = Image.new("RGBA", (160, 160), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((12, 12, 148, 148), fill=(20, 20, 20, 255))
+            draw.rectangle((42, 42, 118, 118), fill=(255, 255, 255, 0))
+            draw.ellipse((66, 66, 94, 94), fill=(20, 20, 20, 255))
+            draw.ellipse((76, 76, 84, 84), fill=(255, 255, 255, 0))
+            image.save(image_path)
+
+            silhouette_config = replace(
+                self.silhouette_config,
+                detail_mode="preserve_holes",
+                min_contour_area=1,
+                min_island_area_px=0,
+                remove_small_islands=False,
+                simplify_tolerance=0.2,
+            )
+            analysis = analyze_image(image_path, output_mask, silhouette_config)
+            vector_config = replace(
+                self.stl_config,
+                stl_backend="vector_extrusion",
+                detail_mode="preserve_holes",
+            )
+
+            stl_result = create_relief_stl(analysis, stl_path, vector_config)
+            self.assertEqual(stl_result.actual_backend, "vector_extrusion")
+            self.assertFalse(stl_result.fallback_used)
+
+            report = validate_stl_mesh(stl_path)
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertEqual(report.failures, [])
+
     def test_colored_logo_foreground_survives_thresholding(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -286,6 +350,7 @@ class GeometryRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(logo_config.min_island_area_px, 150)
         self.assertFalse(logo_config.preserve_islands_near_body)
         self.assertEqual(logo_config.island_near_body_distance_px, 0)
+        self.assertLessEqual(logo_config.simplify_tolerance, 0.6)
 
     def test_legacy_logo_clean_alias_maps_to_clean_logo(self) -> None:
         logo_config = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="logo_clean"))
@@ -295,14 +360,20 @@ class GeometryRegressionTests(unittest.TestCase):
         self.assertFalse(logo_config.preserve_islands_near_body)
 
     def test_phase_10_logo_presets_have_distinct_cleanup_profiles(self) -> None:
+        default = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="default"))
         clean_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="clean_logo"))
+        detail_preserving = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="detail_preserving"))
         drip_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="drip_logo"))
         splatter_logo = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="splatter_logo"))
         line_art = apply_cleanup_preset(replace(self.silhouette_config, cleanup_preset="line_art"))
 
+        self.assertEqual(default.cleanup_preset, "default")
+        self.assertLessEqual(default.simplify_tolerance, 0.7)
+
         self.assertEqual(clean_logo.cleanup_preset, "clean_logo")
         self.assertGreaterEqual(clean_logo.min_island_area_px, 150)
         self.assertFalse(clean_logo.preserve_islands_near_body)
+        self.assertLessEqual(clean_logo.simplify_tolerance, 0.6)
 
         self.assertEqual(line_art.cleanup_preset, "line_art")
         self.assertGreater(line_art.min_island_area_px, 35)
@@ -311,17 +382,23 @@ class GeometryRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(line_art.island_near_body_distance_px, 4)
         self.assertLessEqual(line_art.island_near_body_distance_px, 6)
         self.assertTrue(line_art.preserve_internal_details)
+        self.assertEqual(line_art.simplify_tolerance, 0.7)
+
+        self.assertEqual(detail_preserving.cleanup_preset, "detail_preserving")
+        self.assertLessEqual(detail_preserving.simplify_tolerance, 0.7)
+        self.assertLessEqual(detail_preserving.min_island_area_px, 35)
 
         self.assertEqual(drip_logo.cleanup_preset, "drip_logo")
         self.assertTrue(drip_logo.preserve_islands_near_body)
         self.assertGreaterEqual(drip_logo.island_near_body_distance_px, 14)
         self.assertGreaterEqual(drip_logo.min_island_area_px, 110)
+        self.assertLessEqual(drip_logo.simplify_tolerance, 0.7)
 
         self.assertEqual(splatter_logo.cleanup_preset, "splatter_logo")
         self.assertTrue(splatter_logo.preserve_islands_near_body)
         self.assertGreaterEqual(splatter_logo.island_near_body_distance_px, 18)
         self.assertLessEqual(splatter_logo.min_contour_area, 18)
-        self.assertLessEqual(splatter_logo.simplify_tolerance, 0.65)
+        self.assertLessEqual(splatter_logo.simplify_tolerance, 0.6)
 
     @staticmethod
     def _create_regression_artwork(path: Path) -> None:

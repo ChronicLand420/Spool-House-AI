@@ -148,13 +148,12 @@ def extract_vector_contours(
             fallback_used = True
         if len(candidate) < 3:
             continue
-        parent_index = hierarchy[0][index][3] if hierarchy is not None else -1
         smoothed_area += abs(float(cv2.contourArea(candidate.astype(np.float32))))
         smoothed_boxes.append(cv2.boundingRect(np.round(candidate).astype(np.int32).reshape(-1, 1, 2)))
         vector_contours.append(
             VectorContour(
                 points=candidate,
-                is_hole=parent_index >= 0,
+                is_hole=_contour_is_hole(index, hierarchy),
                 area=area,
                 original_points=original_points,
                 fallback_used=candidate_fallback,
@@ -178,6 +177,17 @@ def extract_vector_contours(
         rejected_cleanup_count=rejected_cleanup_count,
     )
     return vector_contours, report
+
+
+def _contour_is_hole(index: int, hierarchy: np.ndarray | None) -> bool:
+    if hierarchy is None:
+        return False
+    depth = 0
+    parent_index = int(hierarchy[0][index][3])
+    while parent_index >= 0:
+        depth += 1
+        parent_index = int(hierarchy[0][parent_index][3])
+    return depth % 2 == 1
 
 
 def straighten_long_runs(

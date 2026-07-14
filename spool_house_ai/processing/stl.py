@@ -383,12 +383,12 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
         else:
             exterior_polygons.extend(polygon_parts)
 
+    hole_assignments = _assign_holes_to_exteriors(exterior_polygons, hole_polygons)
     polygons = []
-    for exterior in exterior_polygons:
+    for index, exterior in enumerate(exterior_polygons):
         holes = [
             list(hole.exterior.coords)
-            for hole in hole_polygons
-            if exterior.contains(hole.representative_point())
+            for hole in hole_assignments[index]
         ]
         polygon = Polygon(list(exterior.exterior.coords), holes)
         if not polygon.is_valid:
@@ -400,16 +400,64 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
 
     merged = unary_union(polygons)
     merged_polygons = _valid_polygon_parts(merged)
+    mesh = _extrude_polygon_parts(merged_polygons, extrusion_height)
+    if not _vector_mesh_is_safe(mesh):
+        repaired_polygons = _repair_polygon_parts_for_extrusion(merged_polygons, scale)
+        repaired_mesh = _extrude_polygon_parts(repaired_polygons, extrusion_height)
+        if _vector_mesh_is_safe(repaired_mesh):
+            mesh = repaired_mesh
+        else:
+            open_edges, overused_edges, non_manifold_edges = _mesh_edge_counts(mesh)
+            raise ValueError(
+                "Vector extrusion produced an invalid mesh before export "
+                f"(watertight: {mesh.is_watertight}, "
+                f"open edges: {open_edges}, "
+                f"overused edges: {overused_edges}, "
+                f"non-manifold edges: {non_manifold_edges})"
+            )
+
+    mesh.export(output_path)
+    return mesh
+
+
+def _extrude_polygon_parts(polygons: list, extrusion_height: float) -> trimesh.Trimesh:
     meshes = [
         trimesh.creation.extrude_polygon(polygon, height=extrusion_height)
-        for polygon in merged_polygons
+        for polygon in polygons
     ]
     if not meshes:
         raise ValueError("Vector extrusion did not create any meshes.")
+    return trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
 
-    mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
-    mesh.export(output_path)
-    return mesh
+
+def _vector_mesh_is_safe(mesh: trimesh.Trimesh) -> bool:
+    open_edges, overused_edges, non_manifold_edges = _mesh_edge_counts(mesh)
+    return bool(mesh.is_watertight and open_edges == 0 and overused_edges == 0 and non_manifold_edges == 0)
+
+
+def _repair_polygon_parts_for_extrusion(polygons: list, scale_mm_per_pixel: float) -> list:
+    epsilon = max(float(scale_mm_per_pixel) * 0.01, 1e-5)
+    repaired = []
+    for polygon in polygons:
+        cleaned = polygon.buffer(epsilon, join_style=3).buffer(-epsilon, join_style=3)
+        repaired.extend(_valid_polygon_parts(cleaned))
+    return repaired
+
+
+def _assign_holes_to_exteriors(exterior_polygons: list, hole_polygons: list) -> list[list]:
+    assignments: list[list] = [[] for _ in exterior_polygons]
+    for hole in hole_polygons:
+        representative_point = hole.representative_point()
+        containing_exteriors = [
+            (index, exterior.area)
+            for index, exterior in enumerate(exterior_polygons)
+            if exterior.contains(representative_point)
+        ]
+        if not containing_exteriors:
+            continue
+        exterior_index, _ = min(containing_exteriors, key=lambda item: (item[1], item[0]))
+        assignments[exterior_index].append(hole)
+    return assignments
 
 
 def _valid_polygon_parts(geometry):

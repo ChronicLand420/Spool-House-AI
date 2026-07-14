@@ -324,7 +324,7 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
     cleanup_preset = normalize_cleanup_preset(preset or config.cleanup_preset)
     config = replace(config, cleanup_preset=cleanup_preset)
     if cleanup_preset == "default":
-        return config
+        return replace(config, simplify_tolerance=min(config.simplify_tolerance, 0.7))
     if cleanup_preset == "clean_logo":
         return replace(
             config,
@@ -337,6 +337,7 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
             morphology_enabled=True,
             morph_kernel_size=max(config.morph_kernel_size, 3),
             morph_iterations=max(config.morph_iterations, 1),
+            simplify_tolerance=min(config.simplify_tolerance, 0.6),
             contour_smoothing_enabled=True,
             straight_line_cleanup_enabled=True,
             curve_fit_enabled=True,
@@ -371,6 +372,7 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
             morphology_enabled=True,
             morph_kernel_size=max(config.morph_kernel_size, 3),
             morph_iterations=max(config.morph_iterations, 1),
+            simplify_tolerance=min(config.simplify_tolerance, 0.7),
             contour_smoothing_enabled=True,
             straight_line_cleanup_enabled=True,
             curve_fit_enabled=True,
@@ -385,7 +387,7 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
             preserve_holes=True,
             preserve_internal_details=True,
             min_contour_area=min(config.min_contour_area, 18.0),
-            simplify_tolerance=min(config.simplify_tolerance, 0.65),
+            simplify_tolerance=min(config.simplify_tolerance, 0.6),
             contour_smoothing_enabled=True,
             straight_line_cleanup_enabled=True,
             curve_fit_enabled=True,
@@ -398,6 +400,7 @@ def apply_cleanup_preset(config: SilhouetteConfig, preset: str | None = None) ->
             preserve_islands_near_body=True,
             island_near_body_distance_px=max(config.island_near_body_distance_px, 10.0),
             preserve_internal_details=True,
+            simplify_tolerance=min(config.simplify_tolerance, 0.7),
         )
     if cleanup_preset == "preserve_floating_islands":
         return replace(
