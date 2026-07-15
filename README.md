@@ -88,6 +88,20 @@ docs/screenshots/gui-output.png
 
 Session patch notes live in [`docs/devlog/`](docs/devlog/). Each meaningful development session should create one entry that records what changed, why, how it was tested, and what still needs attention.
 
+## Test Fixtures
+
+The recommendation unit tests use deterministic synthetic images generated during the test run. They do not require AI, internet access, external assets, or files under `input/`.
+
+Five personal real-artwork files may be used as optional local QA fixtures:
+
+- `input/Tanjiro.jpg`
+- `input/Deer Scene.png`
+- `input/mopar v3.png`
+- `input/Nike Drip.jpg`
+- `input/Butterfly Flower.png`
+
+These files are not required for normal builds and must not be committed. If present, the real-image regression tests run automatically; if absent, those tests are reported as skipped. Developers may also point individual optional tests at local files outside the repository with `SHS_QA_IMAGE_TANJIRO`, `SHS_QA_IMAGE_DEER_SCENE`, `SHS_QA_IMAGE_MOPAR_V3`, `SHS_QA_IMAGE_NIKE_DRIP`, or `SHS_QA_IMAGE_BUTTERFLY_FLOWER`.
+
 ## Patch Notes Workflow
 
 Before changes:
