@@ -47,12 +47,13 @@ The app supports:
 - Watch rooms light up as stages run: Intake Room, Cleanup Lab, Detail Analyzer, Vector Workshop, Mesh Forge, Render Bay, and Output Vault.
 - See elapsed time, rough ETA, and batch item count in the status strip while jobs run.
 - Use `Output Vault` and `Production Review` to inspect generated files and preview thumbnails.
-- Use `Open in Slicer` after generation to open the validated generic 3MF when available, with STL fallback.
+- Review the local artwork recommendation for preset and finished thickness, then click `Apply Recommendation` only if you want SHS to use it.
 - Open the output folder, STL, 3MF, SVG, or preview directly when you need a specific artifact.
+- Use `Open STL` or `Open 3MF` to open that exact model file in the configured slicer.
 
 The header `Settings` button controls UI-only preferences such as dark/light theme, accent color, density, preview size, startup log behavior, output folder, slicer handoff preference, and optional post-generation actions. The Spool House Orange accent uses the official logo orange while keeping the internal preference value `orange` for compatibility. These preferences are stored separately from production pipeline settings in `config/ui_preferences.json`, which is ignored by Git.
 
-`Open in Slicer` supports System default, OrcaSlicer, and Bambu Studio launch modes. It only opens the selected model file; it does not slice, export G-code, modify printer profiles, modify filament profiles, or inject filament-change markers. By default SHS prefers the validated generic 3MF and falls back to STL if the 3MF is unavailable or failed validation. Optional OrcaSlicer and Bambu Studio executable paths can be configured in Settings.
+The slicer handoff supports System default, OrcaSlicer, and Bambu Studio launch modes. It only opens the selected STL or validated generic 3MF file; it does not slice, export G-code, modify printer profiles, modify filament profiles, or inject filament-change markers. Optional OrcaSlicer and Bambu Studio executable paths can be configured in Settings.
 
 The Settings/About area also has optional Support / Contact buttons. They are disabled until real links are configured in `spool_house_ai/app_identity.py` through `APP_SUPPORT_URL`, `APP_CONTACT_URL`, `APP_CONTACT_EMAIL`, or `APP_GITHUB_URL`. Donations are optional; the app has no ads, tracking, export limits, or paywall logic.
 
@@ -434,6 +435,8 @@ The GUI exposes cleanup presets in the Presets panel:
 - `preserve_floating_islands`: preserves intentional detached dots, stars, eye highlights, earrings, accents, and multipart artwork by disabling automatic island removal.
 
 Use Clean Logo when a logo or wall-art input has unwanted floating dots, specks, or small detached islands. Use Line Art for sneaker outlines, coloring-page drawings, tattoo-flash style artwork, technical outlines, and artwork where interior strokes matter. Use Drip / Graffiti for drip marks where nearby drops are part of the design. Use Splatter / Rough for distressed or rough logos where edge texture matters. Use Preserve Floating Islands when detached dots are intentional details, such as stars, stippling, sparkles, distressed texture, eye highlights, earrings, or small decorative marks. For Filament Swap Relief, use `Island handling = Preserve all` instead of the Wall Art cleanup preset.
+
+The GUI includes a deterministic local recommendation helper near the preset controls. It measures the selected artwork's mask, components, holes, contour density, edge density, roughness, narrow-feature percentage, and drip/splatter signals, then suggests a cleanup preset and finished model thickness. This is not AI, does not use the internet, and never changes settings automatically; click `Apply Recommendation` to accept it or keep your own choices.
 
 Each `job_status.json` includes an `artifact_summary` section with artwork cleanup counts such as isolated, removed, and preserved islands. `mesh_report.json` stays focused on STL mesh health; `artifact_summary` is about artwork cleanup quality before export. `job_summary.md` is a short human-readable package summary for slicer/product review.
 

@@ -9,9 +9,6 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 from spool_house_ai.output_paths import JobOutputPaths
-
-
-OPEN_IN_SLICER_LABEL = "Open in Slicer"
 PREFERRED_SLICERS = {"system_default", "orca", "bambu"}
 SLICER_LABELS = {
     "system_default": "System default",
@@ -98,48 +95,36 @@ def normalize_preferred_slicer(value: str | None) -> str:
     return normalized if normalized in PREFERRED_SLICERS else "system_default"
 
 
-def select_slicer_input(
+def select_specific_slicer_input(
     paths: JobOutputPaths | None,
     job_status: dict | None,
-    *,
-    prefer_generic_3mf: bool = True,
+    file_format: str,
 ) -> SlicerInputSelection:
+    normalized = str(file_format or "").strip().lower().lstrip(".")
     if paths is None:
-        return SlicerInputSelection(None, "", False, False, "", "No successful output is selected.")
-    generic_ok = _validated_generic_3mf_available(paths, job_status)
-    stl_ok = _successful_stl_available(paths, job_status)
-
-    if prefer_generic_3mf and generic_ok:
+        return SlicerInputSelection(None, normalized, False, False, "", "No successful output is selected.")
+    if normalized == "stl":
+        if _successful_stl_available(paths, job_status):
+            return SlicerInputSelection(paths.stl_path, "stl", False, False, "Opening STL.")
+        return SlicerInputSelection(None, "stl", False, False, "", "No successful STL output exists for this job.")
+    if normalized == "3mf":
+        if _validated_generic_3mf_available(paths, job_status):
+            return SlicerInputSelection(
+                paths.generic_3mf_path,
+                "3mf",
+                True,
+                False,
+                "Opening validated generic 3MF.",
+            )
         return SlicerInputSelection(
-            paths.generic_3mf_path,
+            None,
             "3mf",
-            True,
             False,
-            "Opening validated generic 3MF.",
-        )
-    if stl_ok:
-        message = "Opening STL."
-        fallback = False
-        if prefer_generic_3mf and not generic_ok:
-            message = "Generic 3MF unavailable; opening STL instead."
-            fallback = True
-        return SlicerInputSelection(paths.stl_path, "stl", False, fallback, message)
-    if generic_ok:
-        return SlicerInputSelection(
-            paths.generic_3mf_path,
-            "3mf",
-            True,
             False,
-            "Opening validated generic 3MF; STL was unavailable.",
+            "",
+            "No validated generic 3MF output exists for this job.",
         )
-    return SlicerInputSelection(
-        None,
-        "",
-        False,
-        False,
-        "",
-        "No successful STL or validated generic 3MF output exists for this job.",
-    )
+    return SlicerInputSelection(None, normalized, False, False, "", f"Unsupported slicer file format: {file_format}")
 
 
 def discover_slicer(

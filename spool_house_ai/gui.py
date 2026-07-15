@@ -59,18 +59,22 @@ from spool_house_ai.app_identity import (
     set_windows_app_user_model_id,
 )
 from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config, normalize_cleanup_preset
+from spool_house_ai.artwork_recommendations import (
+    ArtworkRecommendation,
+    ArtworkRecommendationCache,
+    MIN_RECOMMENDED_THICKNESS_MM,
+)
 from spool_house_ai.logging_setup import configure_logging
 from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths, build_job_output_paths_for_stem
 from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.processing.filament_layers import calculate_filament_swap_plan
 from spool_house_ai.slicer_integration import (
-    OPEN_IN_SLICER_LABEL,
     SLICER_LABELS,
     build_slicer_launch_plan,
     discover_slicer,
     launch_slicer_plan,
     normalize_preferred_slicer,
-    select_slicer_input,
+    select_specific_slicer_input,
 )
 from spool_house_ai.ui_preferences import (
     UiPreferences,
@@ -399,7 +403,7 @@ class SettingsDialog(QDialog):
         slicer_group.setObjectName("settingsGroup")
         slicer_layout = QVBoxLayout(slicer_group)
         slicer_hint = QLabel(
-            "Choose how Open in Slicer launches the selected model. SHS opens the file only; it does not slice, export G-code, or change slicer profiles."
+            "Choose how Open STL and Open 3MF launch models. SHS opens the selected file only; it does not slice, export G-code, or change slicer profiles."
         )
         slicer_hint.setObjectName("mutedText")
         slicer_hint.setWordWrap(True)
@@ -410,13 +414,10 @@ class SettingsDialog(QDialog):
                 ("Bambu Studio", "bambu"),
             ]
         )
-        self.prefer_generic_3mf = QCheckBox("Prefer validated generic 3MF")
-        self.prefer_generic_3mf.setToolTip("Use the validated generic 3MF when available, with STL fallback.")
         slicer_form = QFormLayout()
         slicer_form.addRow("Preferred slicer", self.preferred_slicer_combo)
         slicer_layout.addWidget(slicer_hint)
         slicer_layout.addLayout(slicer_form)
-        slicer_layout.addWidget(self.prefer_generic_3mf)
 
         self.orca_path_edit = QLineEdit()
         self.orca_path_edit.setPlaceholderText("Optional OrcaSlicer executable path")
@@ -508,7 +509,6 @@ class SettingsDialog(QDialog):
         self.preferred_slicer_combo.currentIndexChanged.connect(self._emit_changed)
         for checkbox in [self.open_output_after, self.show_summary_after, self.use_last_preset]:
             checkbox.toggled.connect(self._emit_changed)
-        self.prefer_generic_3mf.toggled.connect(self._emit_changed)
         self.orca_path_edit.editingFinished.connect(self._emit_changed)
         self.bambu_path_edit.editingFinished.connect(self._emit_changed)
         self.choose_output_button.clicked.connect(self.choose_output_folder)
@@ -606,7 +606,6 @@ class SettingsDialog(QDialog):
         self.output_folder_edit.setText(preferences.output_folder)
         self.output_folder_edit.setToolTip(preferences.output_folder or str(self.default_output_dir))
         self._set_combo(self.preferred_slicer_combo, normalize_preferred_slicer(preferences.preferred_slicer))
-        self.prefer_generic_3mf.setChecked(preferences.prefer_generic_3mf)
         self.orca_path_edit.setText(preferences.orca_executable_path)
         self.bambu_path_edit.setText(preferences.bambu_executable_path)
         self._syncing = False
@@ -626,7 +625,6 @@ class SettingsDialog(QDialog):
             preferred_slicer=str(self.preferred_slicer_combo.currentData() or "system_default"),
             orca_executable_path=self.orca_path_edit.text().strip(),
             bambu_executable_path=self.bambu_path_edit.text().strip(),
-            prefer_generic_3mf=self.prefer_generic_3mf.isChecked(),
         )
 
     def reset_preferences(self) -> None:
@@ -759,6 +757,8 @@ class MainWindow(QMainWindow):
         self.batch_failure_count = 0
         self.current_stage = "Waiting"
         self.current_stage_progress_index = 0
+        self.recommendation_cache = ArtworkRecommendationCache()
+        self.current_recommendation: ArtworkRecommendation | None = None
         self.batch_started_at = 0.0
         self.runtime_timer = QTimer(self)
         self.runtime_timer.setInterval(1000)
@@ -885,6 +885,7 @@ class MainWindow(QMainWindow):
         add_button.clicked.connect(self.add_image)
         self.queue = DropQueue()
         self.queue.files_added.connect(self.add_files)
+        self.queue.currentItemChanged.connect(lambda *_args: self.refresh_artwork_recommendation())
         self.queue.setMinimumHeight(110)
         self.generate_button = QPushButton("Generate")
         self.generate_button.setObjectName("primaryButton")
@@ -896,10 +897,10 @@ class MainWindow(QMainWindow):
         self.generate_all_button.clicked.connect(self.generate_all)
         self.open_output_button = QPushButton("Open Output Folder")
         self.open_output_button.setToolTip("Open the latest job folder after generation.")
-        self.open_slicer_button = QPushButton(OPEN_IN_SLICER_LABEL)
-        self.open_slicer_button.setToolTip("Open the validated generic 3MF when available, with STL fallback.")
         self.open_stl_button = QPushButton("Open STL")
+        self.open_stl_button.setToolTip("Open the STL in the configured slicer.")
         self.open_3mf_button = QPushButton("Open 3MF")
+        self.open_3mf_button.setToolTip("Open the validated generic 3MF in the configured slicer.")
         self.open_svg_button = QPushButton("Open SVG")
         self.open_preview_button = QPushButton("Open Preview")
         self.open_output_root_button = QPushButton("Open Root Folder")
@@ -912,7 +913,6 @@ class MainWindow(QMainWindow):
         self.copy_job_status_button = QPushButton("Copy Job Status Path")
         self.output_buttons = [
             self.open_output_button,
-            self.open_slicer_button,
             self.open_stl_button,
             self.open_3mf_button,
             self.open_svg_button,
@@ -927,7 +927,6 @@ class MainWindow(QMainWindow):
         self.open_output_button.clicked.connect(self.open_latest_or_root)
         self.open_output_root_button.clicked.connect(self.open_output_root)
         self.copy_output_root_button.clicked.connect(self.copy_output_root)
-        self.open_slicer_button.clicked.connect(self.open_in_slicer)
         self.open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
         self.open_3mf_button.clicked.connect(lambda: self.open_named_output(".3mf"))
         self.open_svg_button.clicked.connect(lambda: self.open_named_output(".svg"))
@@ -958,15 +957,14 @@ class MainWindow(QMainWindow):
         output_grid.addWidget(self.open_output_root_button, 0, 0)
         output_grid.addWidget(self.copy_output_root_button, 0, 1)
         output_grid.addWidget(self.open_output_button, 1, 0, 1, 2)
-        output_grid.addWidget(self.open_slicer_button, 2, 0, 1, 2)
-        output_grid.addWidget(self.open_stl_button, 3, 0)
-        output_grid.addWidget(self.open_3mf_button, 3, 1)
-        output_grid.addWidget(self.open_svg_button, 4, 0, 1, 2)
-        output_grid.addWidget(self.open_preview_button, 5, 0, 1, 2)
-        output_grid.addWidget(self.copy_stl_button, 6, 0)
-        output_grid.addWidget(self.copy_svg_button, 6, 1)
-        output_grid.addWidget(self.copy_mesh_report_button, 7, 0, 1, 2)
-        output_grid.addWidget(self.copy_job_status_button, 8, 0, 1, 2)
+        output_grid.addWidget(self.open_stl_button, 2, 0)
+        output_grid.addWidget(self.open_3mf_button, 2, 1)
+        output_grid.addWidget(self.open_svg_button, 3, 0, 1, 2)
+        output_grid.addWidget(self.open_preview_button, 4, 0, 1, 2)
+        output_grid.addWidget(self.copy_stl_button, 5, 0)
+        output_grid.addWidget(self.copy_svg_button, 5, 1)
+        output_grid.addWidget(self.copy_mesh_report_button, 6, 0, 1, 2)
+        output_grid.addWidget(self.copy_job_status_button, 7, 0, 1, 2)
         layout.addLayout(output_grid)
         review_title = QLabel("Stage Compare")
         review_title.setObjectName("sectionTitle")
@@ -1093,6 +1091,8 @@ class MainWindow(QMainWindow):
         self.cleanup_preset.currentIndexChanged.connect(self._cleanup_preset_changed)
         self.extrusion_height = self._double_spin(0.2, 20.0, self.config.stl.extrusion_height_mm)
         self.base_height = self._double_spin(0.2, 10.0, self.config.stl.base_height_mm)
+        self.extrusion_height.valueChanged.connect(lambda *_args: self._update_recommendation_match_state())
+        self.base_height.valueChanged.connect(lambda *_args: self._update_recommendation_match_state())
         self.threshold = self._spin(0, 255, self.config.silhouette.threshold_value)
         self.smoothing = self._spin(0, 25, self.config.silhouette.smoothing_strength)
         self.min_area = self._double_spin(0.0, 5000.0, self.config.silhouette.min_contour_area)
@@ -1115,6 +1115,7 @@ class MainWindow(QMainWindow):
         self.keychain_hole.setChecked(self.config.stl.add_keychain_hole)
         self.keychain_diameter = self._double_spin(1.0, 20.0, self.config.stl.keychain_hole_diameter_mm)
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
+        self.output_scale.valueChanged.connect(lambda *_args: self.refresh_artwork_recommendation())
         self.lithophane_width = self._double_spin(20.0, 300.0, self.config.stl.lithophane_width_mm)
         self.lithophane_min_thickness = self._double_spin(0.2, 10.0, self.config.stl.lithophane_min_thickness_mm)
         self.lithophane_max_thickness = self._double_spin(0.3, 12.0, self.config.stl.lithophane_max_thickness_mm)
@@ -1190,6 +1191,19 @@ class MainWindow(QMainWindow):
         self.preset_help.setObjectName("presetDescription")
         self.preset_help.setWordWrap(True)
         preset_group.layout().addRow(self.preset_help)
+        self.recommendation_summary = QLabel("Add/select artwork to get a local recommendation.")
+        self.recommendation_summary.setObjectName("presetDescription")
+        self.recommendation_summary.setWordWrap(True)
+        self.recommendation_reasons = QLabel("")
+        self.recommendation_reasons.setObjectName("mutedText")
+        self.recommendation_reasons.setWordWrap(True)
+        self.apply_recommendation_button = QPushButton("Apply Recommendation")
+        self.apply_recommendation_button.setObjectName("secondaryButton")
+        self.apply_recommendation_button.setEnabled(False)
+        self.apply_recommendation_button.clicked.connect(self.apply_artwork_recommendation)
+        preset_group.layout().addRow("Recommendation", self.recommendation_summary)
+        preset_group.layout().addRow("", self.recommendation_reasons)
+        preset_group.layout().addRow("", self.apply_recommendation_button)
         layout.addWidget(preset_group)
         product_group = self._form_group(
             "Product Setup",
@@ -1312,6 +1326,7 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         self._update_preset_help()
         self._product_mode_changed()
+        self.refresh_artwork_recommendation()
         scroll.setWidget(panel)
         return scroll
 
@@ -1345,6 +1360,7 @@ class MainWindow(QMainWindow):
 
     def _cleanup_preset_changed(self) -> None:
         self._update_preset_help()
+        self._update_recommendation_match_state()
         if not self._ui_ready or not self.ui_preferences.use_last_selected_preset:
             return
         self.ui_preferences = replace(
@@ -1354,6 +1370,80 @@ class MainWindow(QMainWindow):
         self._save_ui_preferences()
         if self.settings_dialog:
             self.settings_dialog.last_cleanup_preset = self.ui_preferences.last_cleanup_preset
+
+    def refresh_artwork_recommendation(self) -> None:
+        if not hasattr(self, "recommendation_summary"):
+            return
+        image_path = self._selected_or_first_image()
+        if image_path is None:
+            self.current_recommendation = None
+            self.recommendation_summary.setText("Add/select artwork to get a local recommendation.")
+            self.recommendation_reasons.setText("")
+            self.apply_recommendation_button.setEnabled(False)
+            return
+        recommendation = self.recommendation_cache.get(
+            image_path,
+            output_width_mm=self.output_scale.value(),
+            product_mode=self._combo_value(self.product_mode),
+        )
+        self.current_recommendation = recommendation
+        if not recommendation.available and recommendation.unavailable_reason and hasattr(self, "logs"):
+            self.logs.append(f"Recommendation unavailable: {recommendation.unavailable_reason}")
+        self._render_artwork_recommendation(recommendation)
+
+    def apply_artwork_recommendation(self) -> None:
+        recommendation = self.current_recommendation
+        if recommendation is None or not recommendation.available:
+            return
+        preset_index = self.cleanup_preset.findData(recommendation.recommended_preset)
+        if preset_index >= 0:
+            self.cleanup_preset.setCurrentIndex(preset_index)
+        target_thickness = max(MIN_RECOMMENDED_THICKNESS_MM, recommendation.recommended_thickness_mm)
+        multiplier = _product_height_multiplier(self._combo_value(self.product_mode))
+        extrusion = max(self.extrusion_height.minimum(), (target_thickness - self.base_height.value()) / multiplier)
+        self.extrusion_height.setValue(min(self.extrusion_height.maximum(), extrusion))
+        self._update_recommendation_match_state()
+        message = (
+            f"Applied recommendation: {_preset_label(recommendation.recommended_preset)}, "
+            f"{target_thickness:.1f} mm finished thickness."
+        )
+        self._set_status_summary(message, tooltip=message)
+        self.logs.append(message)
+
+    def _render_artwork_recommendation(self, recommendation: ArtworkRecommendation) -> None:
+        if not recommendation.available:
+            self.recommendation_summary.setText("Recommendation unavailable for the current selection.")
+            self.recommendation_reasons.setText(recommendation.reasons[0] if recommendation.reasons else "")
+            self.apply_recommendation_button.setEnabled(False)
+            return
+        preset_label = _preset_label(recommendation.recommended_preset)
+        match_text = (
+            "Current selections match."
+            if self._recommendation_matches_current(recommendation)
+            else "Current selections differ."
+        )
+        self.recommendation_summary.setText(
+            f"{preset_label} / {recommendation.recommended_thickness_mm:.1f} mm / "
+            f"{recommendation.confidence.title()} confidence. {match_text}"
+        )
+        self.recommendation_reasons.setText("Reasons: " + "; ".join(recommendation.reasons))
+        self.apply_recommendation_button.setEnabled(not self._recommendation_matches_current(recommendation))
+
+    def _recommendation_matches_current(self, recommendation: ArtworkRecommendation) -> bool:
+        if not recommendation.available:
+            return False
+        preset_matches = self._combo_value(self.cleanup_preset) == recommendation.recommended_preset
+        thickness_matches = abs(self._current_finished_thickness_mm() - recommendation.recommended_thickness_mm) <= 0.05
+        return preset_matches and thickness_matches
+
+    def _current_finished_thickness_mm(self) -> float:
+        return self.base_height.value() + (
+            self.extrusion_height.value() * _product_height_multiplier(self._combo_value(self.product_mode))
+        )
+
+    def _update_recommendation_match_state(self) -> None:
+        if getattr(self, "current_recommendation", None) is not None and hasattr(self, "recommendation_summary"):
+            self._render_artwork_recommendation(self.current_recommendation)
 
     def _product_mode_changed(self) -> None:
         if not hasattr(self, "product_mode"):
@@ -1437,6 +1527,7 @@ class MainWindow(QMainWindow):
             self.filament_plan_table.setEnabled(is_filament_swap)
         self._update_filament_policy_controls()
         self._refresh_filament_color_plan_estimate()
+        self.refresh_artwork_recommendation()
 
     def _update_filament_policy_controls(self) -> None:
         if not hasattr(self, "filament_island_policy") or not hasattr(self, "product_mode"):
@@ -1632,11 +1723,16 @@ class MainWindow(QMainWindow):
         self.add_files([Path(file) for file in files])
 
     def add_files(self, files: list[Path]) -> None:
+        had_selection = self.queue.currentItem() is not None
         for file in files:
             item = QListWidgetItem(_elide_text(self.queue, str(file)))
             item.setData(Qt.UserRole, str(file))
             item.setToolTip(str(file))
             self.queue.addItem(item)
+        if files and not had_selection:
+            self.queue.setCurrentRow(0)
+        elif files:
+            self.refresh_artwork_recommendation()
 
     def generate(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -1873,16 +1969,15 @@ class MainWindow(QMainWindow):
             room.set_state("idle", "Idle", None)
 
     def open_named_output(self, suffix: str) -> None:
+        if suffix in {".stl", ".3mf"}:
+            self.open_model_output_in_slicer(suffix.lstrip("."))
+            return
         self.open_path(self._named_output_path(suffix))
 
-    def open_in_slicer(self) -> None:
+    def open_model_output_in_slicer(self, file_format: str) -> None:
         paths = self._current_job_paths()
         job_status = self._current_job_status()
-        selection = select_slicer_input(
-            paths,
-            job_status,
-            prefer_generic_3mf=self.ui_preferences.prefer_generic_3mf,
-        )
+        selection = select_specific_slicer_input(paths, job_status, file_format)
         if not selection.success:
             QMessageBox.warning(self, APP_DISPLAY_NAME, selection.error)
             self.logs.append(selection.error)
@@ -1907,7 +2002,7 @@ class MainWindow(QMainWindow):
             self._set_status_summary(result.message, tooltip=result.message)
             self.logs.append(result.message)
         else:
-            message = result.error or "Could not open the selected model in a slicer."
+            message = result.error or f"Could not open the selected {file_format.upper()} in a slicer."
             QMessageBox.warning(self, APP_DISPLAY_NAME, message)
             self.logs.append(message)
 
@@ -2006,13 +2101,12 @@ class MainWindow(QMainWindow):
         job_status_path = self._report_output_path("job_status.json")
         paths = self._current_job_paths()
         status = self._current_job_status()
-        selection = select_slicer_input(paths, status, prefer_generic_3mf=self.ui_preferences.prefer_generic_3mf)
-        three_mf_selection = select_slicer_input(paths, status, prefer_generic_3mf=True)
+        stl_selection = select_specific_slicer_input(paths, status, "stl")
+        three_mf_selection = select_specific_slicer_input(paths, status, "3mf")
         availability = {
             self.open_output_button: self.current_output_dir.exists(),
-            self.open_slicer_button: selection.success,
-            self.open_stl_button: bool(stl_path and stl_path.exists()),
-            self.open_3mf_button: bool(three_mf_path and three_mf_path.exists() and three_mf_selection.used_generic_3mf),
+            self.open_stl_button: bool(stl_path and stl_path.exists() and stl_selection.success),
+            self.open_3mf_button: bool(three_mf_path and three_mf_path.exists() and three_mf_selection.success),
             self.open_svg_button: bool(svg_path and svg_path.exists()),
             self.open_preview_button: bool(preview_path and preview_path.exists()),
             self.copy_stl_button: bool(stl_path and stl_path.exists()),
@@ -2426,6 +2520,22 @@ def _format_mm_value(value: object) -> str:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _preset_label(preset: str) -> str:
+    normalized = normalize_cleanup_preset(preset)
+    for label, value in VISIBLE_CLEANUP_PRESETS:
+        if value == normalized:
+            return label
+    return normalized.replace("_", " ").title()
+
+
+def _product_height_multiplier(product_mode: str) -> float:
+    return {
+        "flat_relief": 1.0,
+        "keychain": 1.15,
+        "wall_art": 1.6,
+    }.get(product_mode, 1.0)
 
 
 if __name__ == "__main__":

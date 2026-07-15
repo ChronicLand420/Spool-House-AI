@@ -12,7 +12,7 @@ from spool_house_ai.slicer_integration import (
     launch_slicer_plan,
     normalize_preferred_slicer,
     safe_slicer_info_diagnostic,
-    select_slicer_input,
+    select_specific_slicer_input,
 )
 
 
@@ -33,49 +33,39 @@ class SlicerIntegrationTests(unittest.TestCase):
             },
         }
 
-    def test_validated_3mf_is_preferred(self) -> None:
+    def test_specific_3mf_requires_validated_generic_export(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
             paths.stl_path.write_text("solid model", encoding="utf-8")
             paths.generic_3mf_path.write_bytes(b"3mf")
-            selection = select_slicer_input(paths, self._successful_status(paths))
+            selection = select_specific_slicer_input(paths, self._successful_status(paths), "3mf")
             self.assertTrue(selection.success)
             self.assertEqual(selection.path, paths.generic_3mf_path)
             self.assertTrue(selection.used_generic_3mf)
 
-    def test_failed_3mf_is_ignored_for_stl_fallback(self) -> None:
+    def test_failed_3mf_is_not_opened_by_direct_3mf_action(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
             paths.stl_path.write_text("solid model", encoding="utf-8")
             paths.generic_3mf_path.write_bytes(b"bad")
             status = self._successful_status(paths)
             status["generic_3mf_summary"]["generic_3mf_validation_passed"] = False
-            selection = select_slicer_input(paths, status)
-            self.assertTrue(selection.success)
-            self.assertEqual(selection.path, paths.stl_path)
-            self.assertTrue(selection.fallback_used)
+            selection = select_specific_slicer_input(paths, status, "3mf")
+            self.assertFalse(selection.success)
+            self.assertIn("No validated generic 3MF", selection.error)
 
-    def test_missing_3mf_falls_back_to_stl(self) -> None:
+    def test_specific_stl_opens_successful_stl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
             paths.stl_path.write_text("solid model", encoding="utf-8")
-            selection = select_slicer_input(paths, {"failures": []})
-            self.assertEqual(selection.path, paths.stl_path)
-            self.assertTrue(selection.fallback_used)
-
-    def test_prefer_generic_false_selects_stl(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            paths = self._paths(temp_dir)
-            paths.stl_path.write_text("solid model", encoding="utf-8")
-            paths.generic_3mf_path.write_bytes(b"3mf")
-            selection = select_slicer_input(paths, self._successful_status(paths), prefer_generic_3mf=False)
+            selection = select_specific_slicer_input(paths, {"failures": []}, "stl")
             self.assertEqual(selection.path, paths.stl_path)
             self.assertFalse(selection.used_generic_3mf)
 
     def test_missing_both_returns_clear_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
-            selection = select_slicer_input(paths, {})
+            selection = select_specific_slicer_input(paths, {}, "stl")
             self.assertFalse(selection.success)
             self.assertIn("No successful STL", selection.error)
 
@@ -122,7 +112,7 @@ class SlicerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
             paths.stl_path.write_text("solid model", encoding="utf-8")
-            selection = select_slicer_input(paths, {"failures": []})
+            selection = select_specific_slicer_input(paths, {"failures": []}, "stl")
             plan = build_slicer_launch_plan(selection, preferred_slicer="system_default")
             opened: list[Path] = []
             result = launch_slicer_plan(plan, system_default_launcher=lambda path: opened.append(path) is None)
@@ -137,7 +127,7 @@ class SlicerIntegrationTests(unittest.TestCase):
             bambu = Path(temp_dir) / "bambu-studio.exe"
             orca.write_text("", encoding="utf-8")
             bambu.write_text("", encoding="utf-8")
-            selection = select_slicer_input(paths, {"failures": []})
+            selection = select_specific_slicer_input(paths, {"failures": []}, "stl")
 
             launched: list[list[str]] = []
 

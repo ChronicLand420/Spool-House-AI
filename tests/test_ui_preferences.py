@@ -36,7 +36,6 @@ class UiPreferencesTests(unittest.TestCase):
                 preferred_slicer="orca",
                 orca_executable_path=str(Path(temp_dir) / "orca-slicer.exe"),
                 bambu_executable_path=str(Path(temp_dir) / "bambu-studio.exe"),
-                prefer_generic_3mf=False,
             )
             save_ui_preferences(path, expected)
             self.assertEqual(load_ui_preferences(path), expected)
@@ -57,7 +56,6 @@ class UiPreferencesTests(unittest.TestCase):
                 "preferred_slicer": "laser-cutter",
                 "orca_executable_path": 123,
                 "bambu_executable_path": None,
-                "prefer_generic_3mf": "yes",
             }
         )
         self.assertEqual(prefs, default_ui_preferences())
@@ -98,19 +96,16 @@ class UiPreferencesTests(unittest.TestCase):
     def test_slicer_preferences_default_and_normalize(self) -> None:
         defaults = default_ui_preferences()
         self.assertEqual(defaults.preferred_slicer, "system_default")
-        self.assertTrue(defaults.prefer_generic_3mf)
         prefs = ui_preferences_from_mapping(
             {
                 "preferred_slicer": "Bambu Studio",
                 "orca_executable_path": r"C:\Tools\OrcaSlicer\orca-slicer.exe",
                 "bambu_executable_path": r"C:\Tools\Bambu Studio\bambu-studio.exe",
-                "prefer_generic_3mf": False,
             }
         )
         self.assertEqual(prefs.preferred_slicer, "bambu")
         self.assertEqual(prefs.orca_executable_path, r"C:\Tools\OrcaSlicer\orca-slicer.exe")
         self.assertEqual(prefs.bambu_executable_path, r"C:\Tools\Bambu Studio\bambu-studio.exe")
-        self.assertFalse(prefs.prefer_generic_3mf)
 
 
 if __name__ == "__main__":

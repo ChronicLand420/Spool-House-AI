@@ -32,7 +32,6 @@ class UiPreferences:
     preferred_slicer: str = "system_default"
     orca_executable_path: str = ""
     bambu_executable_path: str = ""
-    prefer_generic_3mf: bool = True
 
 
 def default_ui_preferences() -> UiPreferences:
@@ -82,7 +81,6 @@ def ui_preferences_from_mapping(raw: dict[str, Any]) -> UiPreferences:
         preferred_slicer=normalize_preferred_slicer(raw.get("preferred_slicer")),
         orca_executable_path=_text(raw.get("orca_executable_path"), defaults.orca_executable_path),
         bambu_executable_path=_text(raw.get("bambu_executable_path"), defaults.bambu_executable_path),
-        prefer_generic_3mf=_bool(raw.get("prefer_generic_3mf"), defaults.prefer_generic_3mf),
     )
 
 
