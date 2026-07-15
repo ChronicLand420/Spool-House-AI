@@ -34,6 +34,8 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertEqual(config.filament_swap_relief.palette_color_space, "rgb")
         self.assertEqual(config.filament_swap_relief.palette_random_seed, 17)
         self.assertAlmostEqual(config.filament_swap_relief.background_confidence_threshold, 0.45)
+        self.assertEqual(config.filament_swap_relief.max_sampled_pixels, 320000)
+        self.assertAlmostEqual(config.filament_swap_relief.min_model_thickness_mm, 2.0)
         self.assertEqual(config.filament_swap_relief.island_policy, "remove_below_threshold")
         self.assertEqual(config.filament_swap_relief.island_merge_fallback, "remove")
         self.assertEqual(config.filament_swap_relief.island_connect_fallback, "remove")
@@ -51,6 +53,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertAlmostEqual(config.layer_height_mm, 0.2)
         self.assertEqual(config.height_alignment_mode, "snap_up")
         self.assertAlmostEqual(config.height_alignment_tolerance_mm, 0.001)
+        self.assertAlmostEqual(config.min_model_thickness_mm, 2.0)
         self.assertFalse(hasattr(config, "export_generic_3mf"))
 
     def test_legacy_generic_3mf_export_field_is_ignored(self) -> None:
@@ -98,7 +101,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(metadata["ignored_background_color_hex"], "#505A69")
             self.assertEqual(metadata["color_count_kept"], 3)
             heights = [color["assigned_height_mm"] for color in metadata["detected_colors"]]
-            self.assertEqual(heights, [0.8, 1.2, 1.6])
+            self.assertEqual(heights, [0.8, 1.2, 2.0])
             self.assertEqual(metadata["detected_colors"][0]["suggested_color_name"], "white")
             self.assertEqual(metadata["detected_colors"][1]["suggested_color_name"], "red")
             self.assertEqual(metadata["detected_colors"][2]["suggested_color_name"], "black")
@@ -106,8 +109,10 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(metadata["detected_colors"][2]["filament_change_at_mm"], 1.2)
             self.assertEqual(metadata["detected_colors"][1]["change_before_layer"], 5)
             self.assertEqual(metadata["detected_colors"][2]["change_before_layer"], 7)
-            self.assertEqual(metadata["total_printed_layers"], 8)
-            self.assertEqual(metadata["color_plan"]["height_settings"]["aligned_cumulative_boundaries_mm"], [0.0, 0.8, 1.2, 1.6])
+            self.assertEqual(metadata["total_printed_layers"], 10)
+            self.assertEqual(metadata["color_plan"]["height_settings"]["aligned_cumulative_boundaries_mm"], [0.0, 0.8, 1.2, 2.0])
+            self.assertEqual(metadata["final_height_mm"], 2.0)
+            self.assertGreaterEqual(metadata["final_height_mm"], metadata["min_model_thickness_mm"])
             self.assertEqual(metadata["palette_color_space"], "rgb")
             self.assertEqual(metadata["background_confidence_threshold"], 0.45)
             self.assertTrue(metadata["background_ignored"])
@@ -180,7 +185,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
 
             self.assertTrue(report.watertight)
             self.assertEqual([color["suggested_color_name"] for color in metadata["detected_colors"]], ["white", "black"])
-            self.assertEqual([color["assigned_height_mm"] for color in metadata["detected_colors"]], [0.8, 1.2])
+            self.assertEqual([color["assigned_height_mm"] for color in metadata["detected_colors"]], [0.8, 2.0])
 
     def test_stl_geometry_uses_aligned_heights(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -197,6 +202,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
                 first_layer_height_mm=0.2,
                 layer_height_mm=0.2,
                 height_alignment_mode="snap_up",
+                min_model_thickness_mm=0.0,
                 max_sampled_pixels=1000,
                 min_region_area_px=1,
             )
@@ -394,7 +400,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertTrue(status["generic_3mf_summary"]["generic_3mf_validation_passed"])
             self.assertEqual(status["generic_3mf_summary"]["generic_3mf_path"], str(paths.generic_3mf_path))
             self.assertEqual(status["filament_swap_summary"]["color_count_kept"], 3)
-            self.assertEqual(status["filament_swap_summary"]["swap_plan_summary"]["total_printed_layers"], 8)
+            self.assertEqual(status["filament_swap_summary"]["swap_plan_summary"]["total_printed_layers"], 10)
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_enabled"])
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_created"])
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_validation_passed"])
@@ -419,6 +425,38 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertIn("FILAMENT RELIEF MANUAL SWAP PLAN", text_plan)
             self.assertIn("Layers are one-based.", text_plan)
             self.assertIn("CHANGE BEFORE LAYER 5", text_plan)
+
+    def test_diagonal_height_contacts_are_repaired_before_stl_export(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "diagonal_contacts.png"
+            stl_path = temp_path / "diagonal_contacts.stl"
+            image = Image.new("RGB", (4, 4), (80, 90, 105))
+            draw = ImageDraw.Draw(image)
+            draw.point((1, 1), fill=(250, 250, 245))
+            draw.point((2, 2), fill=(250, 250, 245))
+            draw.point((2, 1), fill=(8, 8, 10))
+            draw.point((1, 2), fill=(8, 8, 10))
+            image.save(image_path)
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=4.0,
+                color_count=2,
+                auto_background_ignore=True,
+                max_sampled_pixels=100,
+                min_region_area_px=1,
+                smooth_edges=False,
+                min_model_thickness_mm=0.0,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertGreater(metadata["heightfield_topology_repair_pixels"], 0)
 
     def test_pipeline_always_exports_generic_3mf_for_filament_relief(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

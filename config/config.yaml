@@ -125,7 +125,8 @@ filament_swap_relief:
   auto_background_ignore: true
   background_border_sample_px: 12
   background_confidence_threshold: 0.45
-  max_sampled_pixels: 90000
+  max_sampled_pixels: 320000
+  min_model_thickness_mm: 2.0
   min_region_area_px: 30
   smooth_edges: true
   edge_smoothing_px: 1

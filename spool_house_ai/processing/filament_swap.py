@@ -87,6 +87,12 @@ def create_filament_swap_relief_stl(
         config,
         source_metadata=source_metadata,
     )
+    height_map, topology_repair_pixels = _resolve_height_level_diagonal_contacts(height_map)
+    if topology_repair_pixels:
+        warnings.append(
+            "Filament Swap Relief added local bridge pixels to remove non-manifold diagonal height contacts "
+            f"({topology_repair_pixels} pixels)."
+        )
     if color_plan.get("snapping_occurred"):
         warnings.append(
             "Filament swap heights were aligned to the configured first-layer/normal-layer schedule."
@@ -118,6 +124,7 @@ def create_filament_swap_relief_stl(
         "height_mm": bounds_metadata["height_mm"],
         "base_height_mm": round(float(config.base_height_mm), 4),
         "layer_step_mm": round(float(config.layer_step_mm), 4),
+        "min_model_thickness_mm": round(float(config.min_model_thickness_mm), 4),
         "first_layer_height_mm": round(float(config.first_layer_height_mm), 4),
         "layer_height_mm": round(float(config.layer_height_mm), 4),
         "height_alignment_mode": config.height_alignment_mode,
@@ -153,6 +160,7 @@ def create_filament_swap_relief_stl(
         "downscaled": bool(load_metadata["source_downscaled"]),
         "source_downscaled": bool(load_metadata["source_downscaled"]),
         "max_sampled_pixels": int(config.max_sampled_pixels),
+        "heightfield_topology_repair_pixels": int(topology_repair_pixels),
         "min_region_area_px": int(config.min_region_area_px),
         "smooth_edges": bool(config.smooth_edges),
         "edge_smoothing_px": int(config.edge_smoothing_px),
@@ -510,6 +518,7 @@ def _height_map_for_labels(
         layer_height_mm=config.layer_height_mm,
         height_alignment_mode=config.height_alignment_mode,
         height_alignment_tolerance_mm=config.height_alignment_tolerance_mm,
+        min_model_thickness_mm=config.min_model_thickness_mm,
         source=source_metadata,
         palette_order=config.color_order,
     )
@@ -518,6 +527,68 @@ def _height_map_for_labels(
         mask = labels == int(row["cluster_label"])
         height_map[mask] = float(row["aligned_top_z_mm"])
     return height_map, color_rows, color_plan
+
+
+def _resolve_height_level_diagonal_contacts(height_map: np.ndarray) -> tuple[np.ndarray, int]:
+    """Make cumulative height bands 4-connected so the STL has no point-contact edges."""
+    if not np.any(height_map > 0):
+        return height_map, 0
+
+    repaired = height_map.copy()
+    pixels_added = 0
+    for level in sorted(float(value) for value in np.unique(height_map[height_map > 0])):
+        before = repaired >= level
+        after = _resolve_diagonal_contacts(before)
+        added = after & ~before
+        if np.any(added):
+            repaired[added] = level
+            pixels_added += int(np.count_nonzero(added))
+    return repaired, pixels_added
+
+
+def _resolve_diagonal_contacts(mask: np.ndarray) -> np.ndarray:
+    fixed = mask.astype(bool).copy()
+    height, width = fixed.shape
+    max_passes = max(1, min(max(height, width), 64))
+
+    for _ in range(max_passes):
+        source = fixed.copy()
+        changed = False
+        for y in range(height - 1):
+            for x in range(width - 1):
+                top_left = source[y, x]
+                top_right = source[y, x + 1]
+                bottom_left = source[y + 1, x]
+                bottom_right = source[y + 1, x + 1]
+
+                if top_left and bottom_right and not top_right and not bottom_left:
+                    changed = _fill_stronger_bridge_pixel(fixed, source, [(y, x + 1), (y + 1, x)]) or changed
+                elif top_right and bottom_left and not top_left and not bottom_right:
+                    changed = _fill_stronger_bridge_pixel(fixed, source, [(y, x), (y + 1, x + 1)]) or changed
+        if not changed:
+            break
+
+    return fixed
+
+
+def _fill_stronger_bridge_pixel(
+    fixed: np.ndarray,
+    source: np.ndarray,
+    candidates: list[tuple[int, int]],
+) -> bool:
+    best_y, best_x = max(candidates, key=lambda point: (_neighbor_count(source, point[0], point[1]), -point[0], -point[1]))
+    if fixed[best_y, best_x]:
+        return False
+    fixed[best_y, best_x] = True
+    return True
+
+
+def _neighbor_count(mask: np.ndarray, y: int, x: int) -> int:
+    y0 = max(0, y - 1)
+    y1 = min(mask.shape[0], y + 2)
+    x0 = max(0, x - 1)
+    x1 = min(mask.shape[1], x + 2)
+    return int(np.count_nonzero(mask[y0:y1, x0:x1]))
 
 
 def _mesh_from_height_map(height_map: np.ndarray, width_mm: float) -> tuple[trimesh.Trimesh, dict[str, Any]]:

@@ -111,6 +111,7 @@ def calculate_filament_swap_plan(
     layer_height_mm: float,
     height_alignment_mode: str = "snap_up",
     height_alignment_tolerance_mm: float = 0.001,
+    min_model_thickness_mm: float = 0.0,
     source: Mapping[str, Any] | None = None,
     palette_order: str = "light_to_dark",
 ) -> dict[str, Any]:
@@ -122,10 +123,13 @@ def calculate_filament_swap_plan(
         first_layer_height_mm,
         layer_height_mm,
         height_alignment_tolerance_mm,
+        min_model_thickness_mm,
     )
     alignment_mode = _normalize_alignment_mode(height_alignment_mode)
     color_count = len(colors)
     requested_boundaries = _requested_cumulative_boundaries(color_count, base_height_mm, layer_step_mm)
+    if min_model_thickness_mm > 0 and requested_boundaries[-1] < min_model_thickness_mm:
+        requested_boundaries[-1] = float(min_model_thickness_mm)
     aligned_indices = [0]
     aligned_boundaries = [0.0]
     boundary_snap_records: list[dict[str, Any]] = [
@@ -139,6 +143,10 @@ def calculate_filament_swap_plan(
         }
     ]
     warnings: list[str] = []
+    if min_model_thickness_mm > 0 and base_height_mm + ((color_count - 1) * layer_step_mm) < min_model_thickness_mm:
+        warnings.append(
+            "Final model thickness was increased to satisfy the configured minimum finished thickness."
+        )
 
     for boundary_number, requested_z in enumerate(requested_boundaries[1:], start=1):
         minimum_index = aligned_indices[-1] + 1
@@ -235,6 +243,7 @@ def calculate_filament_swap_plan(
         "height_settings": {
             "requested_base_height_mm": _round_mm(base_height_mm),
             "requested_step_height_mm": _round_mm(layer_step_mm),
+            "minimum_model_thickness_mm": _round_mm(min_model_thickness_mm),
             "aligned_first_transition_mm": _round_mm(aligned_boundaries[1]) if len(aligned_boundaries) > 1 else 0.0,
             "requested_cumulative_boundaries_mm": [_round_mm(value) for value in requested_boundaries],
             "aligned_cumulative_boundaries_mm": [_round_mm(value) for value in aligned_boundaries],
@@ -359,11 +368,14 @@ def _validate_height_settings(
     first_layer_height_mm: float,
     layer_height_mm: float,
     tolerance: float,
+    min_model_thickness_mm: float = 0.0,
 ) -> None:
     if float(base_height_mm) <= 0:
         raise ValueError("base_height_mm must be greater than zero.")
     if float(layer_step_mm) <= 0:
         raise ValueError("layer_step_mm must be greater than zero.")
+    if float(min_model_thickness_mm) < 0:
+        raise ValueError("min_model_thickness_mm must be nonnegative.")
     _validate_layer_settings(first_layer_height_mm, layer_height_mm, tolerance)
 
 

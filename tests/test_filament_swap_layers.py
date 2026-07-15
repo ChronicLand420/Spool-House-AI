@@ -32,6 +32,27 @@ class FilamentSwapLayerMathTests(unittest.TestCase):
         self.assertEqual(plan["colors"][1]["previous_filament_last_layer"], 4)
         self.assertEqual(plan["colors"][2]["change_before_layer"], 7)
 
+    def test_minimum_model_thickness_extends_final_color_band(self) -> None:
+        plan = calculate_filament_swap_plan(
+            _colors(),
+            base_height_mm=0.8,
+            layer_step_mm=0.4,
+            first_layer_height_mm=0.2,
+            layer_height_mm=0.2,
+            height_alignment_mode="snap_up",
+            height_alignment_tolerance_mm=0.001,
+            min_model_thickness_mm=2.0,
+            palette_order="light_to_dark",
+        )
+
+        self.assertEqual(plan["height_settings"]["requested_cumulative_boundaries_mm"], [0.0, 0.8, 1.2, 2.0])
+        self.assertEqual(plan["height_settings"]["aligned_cumulative_boundaries_mm"], [0.0, 0.8, 1.2, 2.0])
+        self.assertEqual(plan["total_requested_thickness_mm"], 2.0)
+        self.assertEqual(plan["total_aligned_thickness_mm"], 2.0)
+        self.assertEqual(plan["total_printed_layers"], 10)
+        self.assertEqual([color["layer_count"] for color in plan["colors"]], [4, 2, 4])
+        self.assertTrue(any("minimum finished thickness" in warning for warning in plan["warnings"]))
+
     def test_different_first_layer_height_does_not_use_simple_division(self) -> None:
         plan = _plan(base=0.8, step=0.4, first=0.28, normal=0.16, mode="snap_up")
 

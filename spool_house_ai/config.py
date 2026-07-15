@@ -148,6 +148,7 @@ class FilamentSwapReliefConfig:
     background_border_sample_px: int
     background_confidence_threshold: float
     max_sampled_pixels: int
+    min_model_thickness_mm: float
     min_region_area_px: int
     smooth_edges: bool
     edge_smoothing_px: int
@@ -558,7 +559,11 @@ def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefCon
             value.get("background_confidence_threshold", 0.45),
             "filament_swap_relief.background_confidence_threshold",
         ),
-        max_sampled_pixels=int(value.get("max_sampled_pixels", 90000)),
+        max_sampled_pixels=int(value.get("max_sampled_pixels", 320000)),
+        min_model_thickness_mm=_positive_float(
+            value.get("min_model_thickness_mm", 2.0),
+            "filament_swap_relief.min_model_thickness_mm",
+        ),
         min_region_area_px=_nonnegative_int(value.get("min_region_area_px", 30), "filament_swap_relief.min_region_area_px"),
         smooth_edges=bool(value.get("smooth_edges", True)),
         edge_smoothing_px=_nonnegative_int(value.get("edge_smoothing_px", 1), "filament_swap_relief.edge_smoothing_px"),
