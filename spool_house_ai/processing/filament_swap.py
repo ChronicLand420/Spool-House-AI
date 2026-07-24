@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 from spool_house_ai.config import FilamentSwapReliefConfig
 from spool_house_ai.processing.filament_layers import calculate_filament_swap_plan
 from spool_house_ai.processing.generic_3mf import GENERIC_3MF_NOTICE
+from spool_house_ai.processing.geometry import smooth_contour_points
 from spool_house_ai.processing.islands import apply_island_policy
 from spool_house_ai.processing.stl import StlCreationResult, export_generic_3mf_for_stl_mesh
 
@@ -49,8 +50,14 @@ def create_filament_swap_relief_stl(
 
     valid_mask = alpha > 15
     labels, centers = _cluster_color_labels(rgb, valid_mask, config)
+    labels, centers, color_merge_metadata = _merge_similar_color_labels(labels, centers, valid_mask, config)
+    warnings: list[str] = []
+    if color_merge_metadata["merge_count"]:
+        warnings.append(
+            f"Merged {color_merge_metadata['merge_count']} similar color shade cluster(s) before height assignment."
+        )
     background_label, background_confident, background_fraction = _detect_background_label(labels, valid_mask, config)
-    printable_labels, ignored_label, warnings = _select_printable_labels(
+    printable_labels, ignored_label, selection_warnings = _select_printable_labels(
         labels,
         centers,
         valid_mask,
@@ -59,6 +66,7 @@ def create_filament_swap_relief_stl(
         background_confident,
         background_fraction,
     )
+    warnings.extend(selection_warnings)
     island_result = apply_island_policy(
         labels,
         printable_labels,
@@ -102,7 +110,9 @@ def create_filament_swap_relief_stl(
     if not np.any(printable_mask):
         raise ValueError("Filament Swap Relief did not find printable color regions.")
 
-    mesh, bounds_metadata = _mesh_from_height_map(height_map, config.width_mm)
+    mesh, bounds_metadata = _mesh_from_height_map(height_map, config.width_mm, config)
+    if bounds_metadata.get("mesh_generation_warning"):
+        warnings.append(str(bounds_metadata["mesh_generation_warning"]))
     mesh.export(output_path)
     generic_3mf_metadata = _export_generic_3mf_metadata(
         mesh,
@@ -132,8 +142,15 @@ def create_filament_swap_relief_stl(
         "color_count_requested": int(config.color_count),
         "color_count_kept": len(color_rows),
         "color_order": config.color_order,
+        "relief_style": config.relief_style,
         "palette_color_space": config.palette_color_space,
         "palette_random_seed": int(config.palette_random_seed),
+        "merge_similar_colors": bool(config.merge_similar_colors),
+        "similar_color_hue_tolerance_degrees": round(float(config.similar_color_hue_tolerance_degrees), 4),
+        "similar_color_max_area_ratio": round(float(config.similar_color_max_area_ratio), 4),
+        "solid_base_enabled": bool(config.solid_base_enabled),
+        "similar_color_merge_count": color_merge_metadata["merge_count"],
+        "similar_color_merges": color_merge_metadata["merges"],
         "clustering_seed": int(config.palette_random_seed),
         "determinism_method": (
             "Exact unique RGB colors when possible; otherwise OpenCV k-means with cv2.setRNGSeed, "
@@ -161,6 +178,14 @@ def create_filament_swap_relief_stl(
         "source_downscaled": bool(load_metadata["source_downscaled"]),
         "max_sampled_pixels": int(config.max_sampled_pixels),
         "heightfield_topology_repair_pixels": int(topology_repair_pixels),
+        "mesh_style": config.mesh_style,
+        "mesh_generation_mode": bounds_metadata.get("mesh_generation_mode", "pixel_heightfield"),
+        "mesh_generation_warning": bounds_metadata.get("mesh_generation_warning", ""),
+        "vector_contour_count": bounds_metadata.get("vector_contour_count", 0),
+        "vector_polygon_count": bounds_metadata.get("vector_polygon_count", 0),
+        "contour_simplify_tolerance_px": round(float(config.contour_simplify_tolerance_px), 4),
+        "contour_smoothing_enabled": bool(config.contour_smoothing_enabled),
+        "contour_smoothing_strength": int(config.contour_smoothing_strength),
         "min_region_area_px": int(config.min_region_area_px),
         "smooth_edges": bool(config.smooth_edges),
         "edge_smoothing_px": int(config.edge_smoothing_px),
@@ -426,6 +451,107 @@ def _rgb_centers_for_labels(pixels: np.ndarray, labels_flat: np.ndarray, count: 
     return centers
 
 
+def _merge_similar_color_labels(
+    labels: np.ndarray,
+    centers: np.ndarray,
+    valid_mask: np.ndarray,
+    config: FilamentSwapReliefConfig,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    metadata: dict[str, Any] = {"merge_count": 0, "merges": []}
+    if not config.merge_similar_colors:
+        return labels, centers, metadata
+
+    counts = _label_counts(labels, valid_mask)
+    active_labels = sorted(counts)
+    if len(active_labels) <= 1:
+        return labels, centers, metadata
+
+    mutable_labels = labels.copy()
+    mutable_centers = centers.astype(np.float32).copy()
+    mutable_counts = dict(counts)
+    for source_label in sorted(active_labels, key=lambda label: (mutable_counts.get(label, 0), label)):
+        source_count = mutable_counts.get(source_label, 0)
+        if source_count <= 0:
+            continue
+        source_hue, source_saturation = _hue_saturation(mutable_centers[source_label])
+        if source_saturation < 0.20:
+            continue
+        candidates = []
+        for destination_label in sorted(active_labels):
+            if destination_label == source_label:
+                continue
+            destination_count = mutable_counts.get(destination_label, 0)
+            if destination_count <= source_count:
+                continue
+            destination_hue, destination_saturation = _hue_saturation(mutable_centers[destination_label])
+            if destination_saturation < 0.20:
+                continue
+            source_name = _suggest_color_name(_rgb_tuple(mutable_centers[source_label]))
+            destination_name = _suggest_color_name(_rgb_tuple(mutable_centers[destination_label]))
+            same_named_family = source_name == destination_name and source_name != "custom color"
+            hue_distance = _hue_distance_degrees(source_hue, destination_hue)
+            area_ratio = source_count / max(1, destination_count)
+            if (
+                (same_named_family or hue_distance <= float(config.similar_color_hue_tolerance_degrees))
+                and area_ratio <= float(config.similar_color_max_area_ratio)
+            ):
+                rgb_distance = float(np.linalg.norm(mutable_centers[source_label] - mutable_centers[destination_label]))
+                candidates.append((not same_named_family, rgb_distance, hue_distance, -destination_count, destination_label, area_ratio))
+        if not candidates:
+            continue
+        _not_same_named_family, rgb_distance, hue_distance, _negative_count, destination_label, area_ratio = min(candidates)
+        destination_count = mutable_counts[destination_label]
+        merged_count = source_count + destination_count
+        mutable_centers[destination_label] = (
+            (mutable_centers[destination_label] * destination_count + mutable_centers[source_label] * source_count)
+            / max(1, merged_count)
+        )
+        mutable_counts[destination_label] = merged_count
+        mutable_counts[source_label] = 0
+        mutable_labels[mutable_labels == source_label] = destination_label
+        metadata["merges"].append(
+            {
+                "source_label": int(source_label),
+                "destination_label": int(destination_label),
+                "source_hex": _rgb_hex(_rgb_tuple(centers[source_label])),
+                "destination_hex_before": _rgb_hex(_rgb_tuple(centers[destination_label])),
+                "destination_hex_after": _rgb_hex(_rgb_tuple(mutable_centers[destination_label])),
+                "source_pixel_count": int(source_count),
+                "destination_pixel_count_before": int(destination_count),
+                "hue_distance_degrees": round(float(hue_distance), 4),
+                "rgb_distance": round(float(rgb_distance), 4),
+                "reason": "same named color family" if not _not_same_named_family else "similar hue and small area",
+                "area_ratio": round(float(area_ratio), 6),
+            }
+        )
+
+    metadata["merge_count"] = len(metadata["merges"])
+    if not metadata["merges"]:
+        return labels, centers, metadata
+
+    active_after = [label for label in sorted(active_labels) if mutable_counts.get(label, 0) > 0]
+    relabel_map = {label: index for index, label in enumerate(active_after)}
+    relabeled = np.full(labels.shape, -1, dtype=np.int32)
+    for old_label, new_label in relabel_map.items():
+        relabeled[mutable_labels == old_label] = new_label
+    new_centers = np.asarray([mutable_centers[label] for label in active_after], dtype=np.float32)
+    for record in metadata["merges"]:
+        record["source_label_after_relabel"] = int(relabel_map.get(record["source_label"], -1))
+        record["destination_label_after_relabel"] = int(relabel_map[record["destination_label"]])
+    return relabeled, new_centers, metadata
+
+
+def _hue_saturation(rgb: np.ndarray) -> tuple[float, float]:
+    pixel = np.clip(np.round(rgb), 0, 255).astype(np.uint8).reshape(1, 1, 3)
+    hsv = cv2.cvtColor(pixel, cv2.COLOR_RGB2HSV)[0, 0]
+    return float(hsv[0]) * 2.0, float(hsv[1]) / 255.0
+
+
+def _hue_distance_degrees(first: float, second: float) -> float:
+    distance = abs(float(first) - float(second)) % 360.0
+    return min(distance, 360.0 - distance)
+
+
 def _detect_background_label(
     labels: np.ndarray,
     valid_mask: np.ndarray,
@@ -473,8 +599,31 @@ def _select_printable_labels(
         )
     candidates.sort(key=lambda label: counts[label], reverse=True)
     selected = candidates[: max(1, int(config.color_count))]
-    selected.sort(key=lambda label: _luminance(centers[label]), reverse=config.color_order == "light_to_dark")
-    return selected, ignored_label, warnings
+    return _order_printable_labels(selected, centers, counts, config), ignored_label, warnings
+
+
+def _order_printable_labels(
+    selected: list[int],
+    centers: np.ndarray,
+    counts: dict[int, int],
+    config: FilamentSwapReliefConfig,
+) -> list[int]:
+    if not selected:
+        return []
+    if config.relief_style == "stacked_blocks":
+        base_label = max(selected, key=lambda label: (counts.get(label, 0), -label))
+        detail_labels = [label for label in selected if label != base_label]
+        detail_labels.sort(
+            key=lambda label: (
+                -counts.get(label, 0),
+                -_luminance(centers[label]),
+                label,
+            )
+        )
+        return [base_label, *detail_labels]
+    ordered = list(selected)
+    ordered.sort(key=lambda label: _luminance(centers[label]), reverse=config.color_order == "light_to_dark")
+    return ordered
 
 
 def _height_map_for_labels(
@@ -522,7 +671,13 @@ def _height_map_for_labels(
         source=source_metadata,
         palette_order=config.color_order,
     )
+    color_plan["relief_style"] = config.relief_style
+    color_plan["mesh_style"] = config.mesh_style
+    color_plan["merge_similar_colors"] = bool(config.merge_similar_colors)
+    color_plan["solid_base_enabled"] = bool(config.solid_base_enabled)
     color_rows = color_plan["colors"]
+    if config.solid_base_enabled and color_rows:
+        height_map[:, :] = float(color_rows[0]["aligned_top_z_mm"])
     for row in color_rows:
         mask = labels == int(row["cluster_label"])
         height_map[mask] = float(row["aligned_top_z_mm"])
@@ -591,7 +746,32 @@ def _neighbor_count(mask: np.ndarray, y: int, x: int) -> int:
     return int(np.count_nonzero(mask[y0:y1, x0:x1]))
 
 
-def _mesh_from_height_map(height_map: np.ndarray, width_mm: float) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+def _mesh_from_height_map(
+    height_map: np.ndarray,
+    width_mm: float,
+    config: FilamentSwapReliefConfig,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+    if config.mesh_style == "vector_contours":
+        try:
+            mesh, metadata = _vector_mesh_from_height_map(height_map, width_mm, config)
+            if _mesh_is_safe(mesh):
+                return mesh, metadata
+            open_edges, overused_edges, non_manifold_edges = _mesh_edge_counts(mesh)
+            fallback_reason = (
+                "Vector-contour filament mesh did not validate "
+                f"(watertight: {mesh.is_watertight}, open edges: {open_edges}, "
+                f"overused edges: {overused_edges}, non-manifold edges: {non_manifold_edges})."
+            )
+        except Exception as error:
+            fallback_reason = f"Vector-contour filament mesh failed: {error}"
+        pixel_mesh, pixel_metadata = _pixel_mesh_from_height_map(height_map, width_mm)
+        pixel_metadata["mesh_generation_warning"] = f"{fallback_reason} Used pixel heightfield fallback."
+        pixel_metadata["mesh_generation_mode"] = "pixel_heightfield"
+        return pixel_mesh, pixel_metadata
+    return _pixel_mesh_from_height_map(height_map, width_mm)
+
+
+def _pixel_mesh_from_height_map(height_map: np.ndarray, width_mm: float) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     height_px, width_px = height_map.shape
     if height_px < 1 or width_px < 1:
         raise ValueError("Filament Swap Relief height map did not contain pixels.")
@@ -664,7 +844,391 @@ def _mesh_from_height_map(height_map: np.ndarray, width_mm: float) -> tuple[trim
         "height_mm": round(float(height_mm), 4),
         "scale_x_mm_per_pixel": round(float(scale_x), 6),
         "scale_y_mm_per_pixel": round(float(scale_y), 6),
+        "mesh_generation_mode": "pixel_heightfield",
+        "mesh_generation_warning": "",
+        "vector_contour_count": 0,
+        "vector_polygon_count": 0,
     }
+
+
+def _vector_mesh_from_height_map(
+    height_map: np.ndarray,
+    width_mm: float,
+    config: FilamentSwapReliefConfig,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+    height_px, width_px = height_map.shape
+    if height_px < 1 or width_px < 1:
+        raise ValueError("Filament Swap Relief height map did not contain pixels.")
+    if width_mm <= 0:
+        raise ValueError("Filament Swap Relief width must be greater than zero.")
+    if not np.any(height_map > 0):
+        raise ValueError("Filament Swap Relief height map has no printable pixels.")
+
+    try:
+        import shapely  # noqa: F401
+    except ImportError as error:
+        raise ImportError("Vector-contour filament mesh requires optional polygon dependencies.") from error
+
+    height_mm = width_mm * (height_px / width_px)
+    scale_x = width_mm / width_px
+    scale_y = height_mm / height_px
+    levels = sorted(float(value) for value in np.unique(height_map[height_map > 0]))
+    cumulative_geometries = []
+    contour_count = 0
+    polygon_count = 0
+
+    for index, level in enumerate(levels):
+        mask = height_map >= (level - 1e-6)
+        geometry, stats = _mask_to_geometry(mask, scale_x, scale_y, height_mm, config)
+        if index > 0:
+            geometry = _clean_geometry(geometry.intersection(cumulative_geometries[index - 1]))
+        if geometry.is_empty:
+            raise ValueError(f"Vector-contour filament mesh had no geometry at height {level:.4f} mm.")
+        cumulative_geometries.append(geometry)
+        contour_count += stats["contours"]
+        polygon_count += len(_geometry_polygons(geometry))
+
+    vertices: list[tuple[float, float, float]] = []
+    vertex_lookup: dict[tuple[float, float, float], int] = {}
+    faces: list[tuple[int, int, int]] = []
+
+    def vertex(x: float, y: float, z: float) -> int:
+        key = (round(float(x), 6), round(float(y), 6), round(float(z), 6))
+        existing = vertex_lookup.get(key)
+        if existing is not None:
+            return existing
+        vertex_lookup[key] = len(vertices)
+        vertices.append(key)
+        return len(vertices) - 1
+
+    def add_cap(geometry, z: float, *, top: bool) -> None:
+        for polygon in _geometry_polygons(geometry):
+            for triangle in _triangulate_cap_polygon(polygon):
+                coords = list(triangle.exterior.coords)[:3]
+                if len(coords) < 3:
+                    continue
+                a, b, c = [vertex(point[0], point[1], z) for point in coords]
+                faces.append((a, b, c) if top else (c, b, a))
+
+    def add_walls(geometry, low_z: float, high_z: float) -> None:
+        if high_z <= low_z:
+            return
+        for polygon in _geometry_polygons(geometry):
+            _add_ring_walls(polygon.exterior.coords, low_z, high_z, vertex, faces)
+            for interior in polygon.interiors:
+                _add_ring_walls(interior.coords, low_z, high_z, vertex, faces)
+
+    add_cap(cumulative_geometries[0], 0.0, top=False)
+    for index, level in enumerate(levels):
+        lower_level = 0.0 if index == 0 else levels[index - 1]
+        add_walls(cumulative_geometries[index], lower_level, level)
+        if index + 1 < len(cumulative_geometries):
+            exposed_top = _clean_geometry(cumulative_geometries[index].difference(cumulative_geometries[index + 1]))
+        else:
+            exposed_top = cumulative_geometries[index]
+        if not exposed_top.is_empty:
+            add_cap(exposed_top, level, top=True)
+
+    if not faces:
+        raise ValueError("Vector-contour filament mesh did not create any faces.")
+    mesh = trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=True)
+    mesh.fix_normals()
+    return mesh, {
+        "height_mm": round(float(height_mm), 4),
+        "scale_x_mm_per_pixel": round(float(scale_x), 6),
+        "scale_y_mm_per_pixel": round(float(scale_y), 6),
+        "mesh_generation_mode": "vector_contours",
+        "mesh_generation_warning": "",
+        "vector_contour_count": contour_count,
+        "vector_polygon_count": polygon_count,
+    }
+
+
+def _mask_to_geometry(
+    mask: np.ndarray,
+    scale_x: float,
+    scale_y: float,
+    depth_mm: float,
+    config: FilamentSwapReliefConfig,
+):
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+
+    contours, _hierarchy = cv2.findContours(mask.astype(np.uint8) * 255, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+    rectangles = []
+    for x_start, x_end, y_start, y_end in _mask_runs_to_rectangles(mask):
+        rectangles.append(
+            box(
+                x_start * scale_x,
+                depth_mm - (y_end * scale_y),
+                x_end * scale_x,
+                depth_mm - (y_start * scale_y),
+            )
+        )
+    if not rectangles:
+        raise ValueError("Vector-contour filament mesh did not find valid polygons.")
+    geometry = _clean_geometry(unary_union(rectangles))
+    geometry = _smooth_filament_geometry(geometry, scale_x, scale_y, config)
+    tolerance_px = max(0.0, float(config.contour_simplify_tolerance_px))
+    if tolerance_px > 0:
+        tolerance_mm = tolerance_px * min(float(scale_x), float(scale_y))
+        geometry = _clean_geometry(geometry.simplify(tolerance_mm, preserve_topology=True))
+    return geometry, {"contours": len(contours)}
+
+
+def _smooth_filament_geometry(geometry, scale_x: float, scale_y: float, config: FilamentSwapReliefConfig):
+    if geometry.is_empty or not config.contour_smoothing_enabled:
+        return geometry
+    strength = max(0, int(config.contour_smoothing_strength))
+    if strength <= 0:
+        return geometry
+    # Smooth about half a sampled pixel per strength step. This reduces stair-stepped
+    # mask edges without acting like a global XY offset or filling intentional openings.
+    radius_mm = min(float(scale_x), float(scale_y)) * min(strength, 3) * 0.5
+    if radius_mm <= 0:
+        return geometry
+    smoothed = _clean_geometry(geometry.buffer(radius_mm, join_style=1).buffer(-radius_mm, join_style=1))
+    smoothed = _clean_geometry(smoothed.buffer(-radius_mm, join_style=1).buffer(radius_mm, join_style=1))
+    return smoothed if not smoothed.is_empty else geometry
+
+
+def _mask_runs_to_rectangles(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Collapse a binary mask into deterministic rectangles without filling enclosed stroke holes."""
+    rectangles: list[tuple[int, int, int, int]] = []
+    active: dict[tuple[int, int], int] = {}
+    height, width = mask.shape
+    for y in range(height):
+        row = mask[y]
+        runs: list[tuple[int, int]] = []
+        x = 0
+        while x < width:
+            if not row[x]:
+                x += 1
+                continue
+            start = x
+            while x < width and row[x]:
+                x += 1
+            runs.append((start, x))
+
+        current = set(runs)
+        for run, y_start in list(active.items()):
+            if run not in current:
+                rectangles.append((run[0], run[1], y_start, y))
+                del active[run]
+        for run in runs:
+            active.setdefault(run, y)
+
+    for run, y_start in sorted(active.items(), key=lambda item: (item[1], item[0][0], item[0][1])):
+        rectangles.append((run[0], run[1], y_start, height))
+    return rectangles
+
+
+def _prepare_filament_contour_points(points: np.ndarray, config: FilamentSwapReliefConfig) -> np.ndarray:
+    if float(config.contour_simplify_tolerance_px) > 0:
+        simplified = cv2.approxPolyDP(
+            points.reshape(-1, 1, 2).astype(np.float32),
+            float(config.contour_simplify_tolerance_px),
+            closed=True,
+        )
+        if len(simplified) >= 3:
+            points = simplified.reshape(-1, 2).astype(np.float32)
+    if config.contour_smoothing_enabled and int(config.contour_smoothing_strength) > 0:
+        points = smooth_contour_points(points, int(config.contour_smoothing_strength), 35.0)
+    return _dedupe_ring_points(points)
+
+
+def _dedupe_ring_points(points: np.ndarray) -> np.ndarray:
+    if len(points) <= 1:
+        return points
+    kept: list[np.ndarray] = []
+    previous: tuple[float, float] | None = None
+    for point in points:
+        current = (round(float(point[0]), 6), round(float(point[1]), 6))
+        if current != previous:
+            kept.append(point)
+            previous = current
+    if len(kept) > 1:
+        first = (round(float(kept[0][0]), 6), round(float(kept[0][1]), 6))
+        last = (round(float(kept[-1][0]), 6), round(float(kept[-1][1]), 6))
+        if first == last:
+            kept.pop()
+    return _remove_collinear_point_array(np.array(kept, dtype=np.float32))
+
+
+def _remove_collinear_point_array(points: np.ndarray) -> np.ndarray:
+    if len(points) <= 3:
+        return points
+    kept = []
+    count = len(points)
+    for index, point in enumerate(points):
+        previous = points[index - 1]
+        next_point = points[(index + 1) % count]
+        if not _points_are_collinear(previous, point, next_point):
+            kept.append(point)
+    if len(kept) < 3:
+        return points
+    return np.array(kept, dtype=np.float32)
+
+
+def _contour_points_to_mm_ring(
+    points: np.ndarray,
+    scale_x: float,
+    scale_y: float,
+    depth_mm: float,
+) -> list[tuple[float, float]]:
+    ring: list[tuple[float, float]] = []
+    previous: tuple[float, float] | None = None
+    for point in points:
+        current = (float(point[0]) * scale_x, depth_mm - (float(point[1]) * scale_y))
+        if current != previous:
+            ring.append(current)
+            previous = current
+    if len(ring) > 1 and ring[0] == ring[-1]:
+        ring.pop()
+    return ring
+
+
+def _contour_is_hole(index: int, hierarchy: np.ndarray | None) -> bool:
+    if hierarchy is None:
+        return False
+    depth = 0
+    parent_index = int(hierarchy[0][index][3])
+    while parent_index >= 0:
+        depth += 1
+        parent_index = int(hierarchy[0][parent_index][3])
+    return depth % 2 == 1
+
+
+def _assign_holes_to_exteriors(exterior_polygons: list, hole_polygons: list) -> list[list]:
+    assignments: list[list] = [[] for _ in exterior_polygons]
+    for hole in hole_polygons:
+        representative_point = hole.representative_point()
+        containing_exteriors = [
+            (index, exterior.area)
+            for index, exterior in enumerate(exterior_polygons)
+            if exterior.contains(representative_point)
+        ]
+        if not containing_exteriors:
+            continue
+        exterior_index, _ = min(containing_exteriors, key=lambda item: (item[1], item[0]))
+        assignments[exterior_index].append(hole)
+    return assignments
+
+
+def _clean_geometry(geometry):
+    if geometry.is_empty:
+        return geometry
+    if not getattr(geometry, "is_valid", True):
+        geometry = geometry.buffer(0)
+    return geometry
+
+
+def _geometry_polygons(geometry) -> list:
+    if geometry.is_empty:
+        return []
+    if geometry.geom_type == "Polygon":
+        return [geometry] if geometry.area > 0 else []
+    if geometry.geom_type in {"MultiPolygon", "GeometryCollection"}:
+        polygons = []
+        for part in geometry.geoms:
+            polygons.extend(_geometry_polygons(part))
+        return polygons
+    return []
+
+
+def _triangulate_cap_polygon(polygon) -> list:
+    from shapely.ops import triangulate
+
+    triangles = []
+    for triangle in triangulate(polygon):
+        if triangle.is_empty or triangle.area <= 1e-9:
+            continue
+        if not polygon.covers(triangle.representative_point()):
+            continue
+        coords = list(triangle.exterior.coords)[:3]
+        if len(coords) < 3:
+            continue
+        if _ring_signed_area(coords) < 0:
+            coords = [coords[0], coords[2], coords[1]]
+            from shapely.geometry import Polygon
+
+            triangle = Polygon(coords)
+        triangles.append(triangle)
+    return triangles
+
+
+def _add_ring_walls(
+    coords,
+    low_z: float,
+    high_z: float,
+    vertex,
+    faces: list[tuple[int, int, int]],
+) -> None:
+    points = _remove_collinear_wall_points(list(coords))
+    if len(points) < 2:
+        return
+    for first, second in zip(points, points[1:]):
+        if first == second:
+            continue
+        a_low = vertex(first[0], first[1], low_z)
+        b_low = vertex(second[0], second[1], low_z)
+        a_high = vertex(first[0], first[1], high_z)
+        b_high = vertex(second[0], second[1], high_z)
+        faces.append((a_high, b_high, b_low))
+        faces.append((a_high, b_low, a_low))
+
+
+def _remove_collinear_wall_points(points: list) -> list:
+    if len(points) <= 3:
+        return points
+    closed = points[0] == points[-1]
+    working = points[:-1] if closed else points[:]
+    if len(working) <= 3:
+        return points
+    kept = []
+    count = len(working)
+    for index, point in enumerate(working):
+        previous = working[index - 1]
+        next_point = working[(index + 1) % count]
+        if not _points_are_collinear(previous, point, next_point):
+            kept.append(point)
+    if len(kept) < 3:
+        kept = working
+    if closed:
+        kept.append(kept[0])
+    return kept
+
+
+def _points_are_collinear(a, b, c, *, tolerance: float = 1e-9) -> bool:
+    ab_x = float(b[0]) - float(a[0])
+    ab_y = float(b[1]) - float(a[1])
+    bc_x = float(c[0]) - float(b[0])
+    bc_y = float(c[1]) - float(b[1])
+    return abs(ab_x * bc_y - ab_y * bc_x) <= tolerance
+
+
+def _ring_signed_area(points: list) -> float:
+    if len(points) < 3:
+        return 0.0
+    area = 0.0
+    for first, second in zip(points, points[1:] + points[:1]):
+        area += (float(first[0]) * float(second[1])) - (float(second[0]) * float(first[1]))
+    return area * 0.5
+
+
+def _mesh_is_safe(mesh: trimesh.Trimesh) -> bool:
+    open_edges, overused_edges, non_manifold_edges = _mesh_edge_counts(mesh)
+    return bool(mesh.is_watertight and open_edges == 0 and overused_edges == 0 and non_manifold_edges == 0)
+
+
+def _mesh_edge_counts(mesh: trimesh.Trimesh) -> tuple[int, int, int]:
+    if len(mesh.faces) == 0 or len(mesh.edges_unique) == 0:
+        return 0, 0, 0
+    edge_use_counts = np.bincount(mesh.edges_unique_inverse, minlength=len(mesh.edges_unique))
+    open_edge_count = int(np.count_nonzero(edge_use_counts == 1))
+    overused_edge_count = int(np.count_nonzero(edge_use_counts > 2))
+    non_manifold_edge_count = int(np.count_nonzero(edge_use_counts != 2))
+    return open_edge_count, overused_edge_count, non_manifold_edge_count
 
 
 def _cluster_preview(

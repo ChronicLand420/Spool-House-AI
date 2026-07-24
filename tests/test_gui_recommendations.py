@@ -64,6 +64,28 @@ class GuiRecommendationTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_filament_relief_quality_and_solid_base_controls_feed_config(self) -> None:
+        window = MainWindow()
+        try:
+            product_index = window.product_mode.findData("filament_swap_relief")
+            self.assertGreaterEqual(product_index, 0)
+            window.product_mode.setCurrentIndex(product_index)
+
+            self.assertTrue(hasattr(window, "filament_detail_quality"))
+            self.assertTrue(hasattr(window, "filament_solid_base"))
+            self.assertEqual(window._combo_value(window.filament_detail_quality), "700000")
+
+            ultra_index = window.filament_detail_quality.findData("1600000")
+            self.assertGreaterEqual(ultra_index, 0)
+            window.filament_detail_quality.setCurrentIndex(ultra_index)
+            window.filament_solid_base.setChecked(True)
+
+            config = window._config_from_controls()
+            self.assertEqual(config.filament_swap_relief.max_sampled_pixels, 1600000)
+            self.assertTrue(config.filament_swap_relief.solid_base_enabled)
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

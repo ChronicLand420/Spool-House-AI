@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 import trimesh
 
@@ -33,8 +34,17 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertEqual(config.filament_swap_relief.color_order, "light_to_dark")
         self.assertEqual(config.filament_swap_relief.palette_color_space, "rgb")
         self.assertEqual(config.filament_swap_relief.palette_random_seed, 17)
+        self.assertTrue(config.filament_swap_relief.merge_similar_colors)
+        self.assertAlmostEqual(config.filament_swap_relief.similar_color_hue_tolerance_degrees, 18.0)
+        self.assertAlmostEqual(config.filament_swap_relief.similar_color_max_area_ratio, 0.12)
+        self.assertFalse(config.filament_swap_relief.solid_base_enabled)
+        self.assertEqual(config.filament_swap_relief.relief_style, "stacked_blocks")
+        self.assertEqual(config.filament_swap_relief.mesh_style, "vector_contours")
+        self.assertAlmostEqual(config.filament_swap_relief.contour_simplify_tolerance_px, 0.45)
+        self.assertTrue(config.filament_swap_relief.contour_smoothing_enabled)
+        self.assertEqual(config.filament_swap_relief.contour_smoothing_strength, 2)
         self.assertAlmostEqual(config.filament_swap_relief.background_confidence_threshold, 0.45)
-        self.assertEqual(config.filament_swap_relief.max_sampled_pixels, 320000)
+        self.assertEqual(config.filament_swap_relief.max_sampled_pixels, 700000)
         self.assertAlmostEqual(config.filament_swap_relief.min_model_thickness_mm, 2.0)
         self.assertEqual(config.filament_swap_relief.island_policy, "remove_below_threshold")
         self.assertEqual(config.filament_swap_relief.island_merge_fallback, "remove")
@@ -54,7 +64,19 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertEqual(config.height_alignment_mode, "snap_up")
         self.assertAlmostEqual(config.height_alignment_tolerance_mm, 0.001)
         self.assertAlmostEqual(config.min_model_thickness_mm, 2.0)
+        self.assertEqual(config.relief_style, "stacked_blocks")
+        self.assertEqual(config.mesh_style, "vector_contours")
+        self.assertTrue(config.merge_similar_colors)
+        self.assertFalse(config.solid_base_enabled)
+        self.assertEqual(config.max_sampled_pixels, 700000)
         self.assertFalse(hasattr(config, "export_generic_3mf"))
+
+    def test_invalid_filament_relief_style_and_mesh_style_are_rejected(self) -> None:
+        load_config_dict = __import__("spool_house_ai.config", fromlist=["_filament_swap_relief_config"])
+        with self.assertRaises(ValueError):
+            load_config_dict._filament_swap_relief_config({"relief_style": "sunken_magic"})
+        with self.assertRaises(ValueError):
+            load_config_dict._filament_swap_relief_config({"mesh_style": "triangle_soup"})
 
     def test_legacy_generic_3mf_export_field_is_ignored(self) -> None:
         load_config_dict = __import__("spool_house_ai.config", fromlist=["_filament_swap_relief_config"])
@@ -62,7 +84,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
 
         self.assertFalse(hasattr(config, "export_generic_3mf"))
 
-    def test_three_color_relief_is_watertight_and_orders_light_to_dark(self) -> None:
+    def test_three_color_relief_is_watertight_and_uses_expected_stack_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             image_path = temp_path / "three_color.png"
@@ -118,6 +140,160 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertTrue(metadata["background_ignored"])
             self.assertIn("island_summary", metadata)
 
+    def test_stacked_blocks_use_largest_color_as_base_and_raise_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "green_yellow_sign.png"
+            stl_path = temp_path / "green_yellow_sign.stl"
+            image = Image.new("RGB", (100, 60), (255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((6, 12, 94, 48), radius=7, fill=(8, 104, 27))
+            draw.rectangle((18, 27, 82, 34), fill=(250, 224, 14))
+            draw.rectangle((88, 13, 91, 18), fill=(103, 153, 35))
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=100.0,
+                color_count=3,
+                max_sampled_pixels=10000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=False,
+                contour_simplify_tolerance_px=0.0,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+
+            self.assertEqual(metadata["relief_style"], "stacked_blocks")
+            self.assertEqual(metadata["similar_color_merge_count"], 1)
+            self.assertEqual(metadata["color_count_kept"], 2)
+            self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertEqual(metadata["mesh_generation_warning"], "")
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertEqual(metadata["detected_colors"][0]["suggested_color_name"], "green")
+            self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 0.8)
+            self.assertEqual(metadata["detected_colors"][1]["hex"], "#FAE00E")
+            self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.0)
+            self.assertLess(report.face_count, 1000)
+
+    def test_stacked_blocks_do_not_fill_raised_border_interior(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "street_sign.png"
+            stl_path = temp_path / "street_sign.stl"
+            image = Image.new("RGB", (140, 80), (255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((8, 12, 132, 68), radius=6, fill=(8, 104, 27))
+            draw.rectangle((18, 24, 122, 56), fill=(250, 224, 14))
+            draw.rectangle((23, 29, 117, 51), fill=(8, 104, 27))
+            draw.rectangle((38, 37, 102, 44), fill=(250, 224, 14))
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=112.0,
+                color_count=2,
+                max_sampled_pixels=20000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=False,
+                contour_simplify_tolerance_px=0.45,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+            mesh = trimesh.load_mesh(stl_path, process=True)
+            lower_area = self._horizontal_face_area(mesh, 0.8)
+            upper_area = self._horizontal_face_area(mesh, 2.0)
+
+            self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertEqual(metadata["detected_colors"][0]["suggested_color_name"], "green")
+            self.assertEqual(metadata["detected_colors"][1]["hex"], "#FAE00E")
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertGreater(lower_area, 0.0)
+            self.assertGreater(upper_area, 0.0)
+            self.assertLess(upper_area, lower_area * 0.75)
+
+    def test_solid_base_plate_fills_background_without_flattening_raised_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "solid_base_sign.png"
+            stl_path = temp_path / "solid_base_sign.stl"
+            image = Image.new("RGB", (140, 80), (255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((28, 22, 112, 58), radius=5, fill=(8, 104, 27))
+            draw.rectangle((48, 36, 92, 43), fill=(250, 224, 14))
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=112.0,
+                color_count=2,
+                max_sampled_pixels=20000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=False,
+                contour_simplify_tolerance_px=0.45,
+                solid_base_enabled=True,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+            mesh = trimesh.load_mesh(stl_path, process=True)
+            lower_area = self._horizontal_face_area(mesh, 0.8)
+            upper_area = self._horizontal_face_area(mesh, 2.0)
+
+            self.assertTrue(metadata["solid_base_enabled"])
+            self.assertTrue(metadata["color_plan"]["solid_base_enabled"])
+            self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertAlmostEqual(report.bounding_box_mm[0], 112.0, delta=0.2)
+            self.assertAlmostEqual(report.bounding_box_mm[1], 64.0, delta=0.2)
+            self.assertGreater(lower_area, upper_area)
+            self.assertGreater(upper_area, 0.0)
+
+    def test_engraved_details_style_keeps_legacy_luminance_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "legacy_order_sign.png"
+            stl_path = temp_path / "legacy_order_sign.stl"
+            image = Image.new("RGB", (80, 40), (255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((8, 8, 72, 32), fill=(8, 104, 27))
+            draw.rectangle((22, 18, 58, 24), fill=(250, 224, 14))
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=80.0,
+                color_count=2,
+                relief_style="engraved_details",
+                max_sampled_pixels=10000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=False,
+                contour_simplify_tolerance_px=0.0,
+            )
+
+            _stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+
+            self.assertEqual(metadata["relief_style"], "engraved_details")
+            self.assertEqual(metadata["detected_colors"][0]["hex"], "#FAE00E")
+            self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 0.8)
+            self.assertEqual(metadata["detected_colors"][1]["suggested_color_name"], "green")
+            self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.0)
+
     def test_repeated_rgb_and_lab_clustering_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -141,6 +317,16 @@ class FilamentSwapReliefTests(unittest.TestCase):
                     [color["hex"] for color in first["detected_colors"]],
                     [color["hex"] for color in second["detected_colors"]],
                 )
+
+    @staticmethod
+    def _horizontal_face_area(mesh: trimesh.Trimesh, z: float) -> float:
+        vertices = np.asarray(mesh.vertices)
+        area = 0.0
+        for face in np.asarray(mesh.faces):
+            points = vertices[face]
+            if np.allclose(points[:, 2], z, atol=1e-6):
+                area += float(np.linalg.norm(np.cross(points[1] - points[0], points[2] - points[0])) / 2.0)
+        return area
 
     def test_background_confidence_threshold_controls_ignore_decision(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

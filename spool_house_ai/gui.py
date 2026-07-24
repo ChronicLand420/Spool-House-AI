@@ -1139,6 +1139,18 @@ class MainWindow(QMainWindow):
         self.lithophane_denoise = self._spin(0, 4, self.config.stl.lithophane_denoise_radius_px)
         self.filament_width = self._double_spin(20.0, 300.0, self.config.filament_swap_relief.width_mm)
         self.filament_color_count = self._spin(2, 5, self.config.filament_swap_relief.color_count)
+        self.filament_detail_quality = self._combo(
+            [
+                ("Standard detail", "320000"),
+                ("High detail", "700000"),
+                ("Ultra detail", "1600000"),
+            ],
+            str(self.config.filament_swap_relief.max_sampled_pixels),
+        )
+        self.filament_detail_quality.setToolTip(
+            "Higher detail samples more artwork pixels for smoother curves and straighter diagonals. "
+            "Ultra can create larger, slower STL files."
+        )
         self.filament_base_height = self._double_spin(0.2, 5.0, self.config.filament_swap_relief.base_height_mm)
         self.filament_layer_step = self._double_spin(0.1, 3.0, self.config.filament_swap_relief.layer_step_mm)
         self.filament_first_layer_height = self._double_spin(
@@ -1154,6 +1166,14 @@ class MainWindow(QMainWindow):
         self.filament_alignment_mode = self._combo(
             [("Snap up", "snap_up"), ("Snap nearest", "snap_nearest"), ("Strict", "strict")],
             self.config.filament_swap_relief.height_alignment_mode,
+        )
+        self.filament_relief_style = self._combo(
+            [("Stacked blocks", "stacked_blocks"), ("Engraved / recessed", "engraved_details")],
+            self.config.filament_swap_relief.relief_style,
+        )
+        self.filament_relief_style.setToolTip(
+            "Stacked blocks makes the largest color the base and raises other colors above it. "
+            "Engraved / recessed keeps the legacy luminance-based order."
         )
         self.filament_palette_color_space = self._combo(
             [("RGB", "rgb"), ("LAB", "lab")],
@@ -1175,6 +1195,16 @@ class MainWindow(QMainWindow):
         self.filament_connection_width = self._spin(1, 20, self.config.filament_swap_relief.island_connection_width_px)
         self.filament_auto_background_ignore = QCheckBox("Auto background ignore")
         self.filament_auto_background_ignore.setChecked(self.config.filament_swap_relief.auto_background_ignore)
+        self.filament_merge_similar_colors = QCheckBox("Merge similar color shades")
+        self.filament_merge_similar_colors.setToolTip(
+            "Merge tiny same-hue shading or antialias clusters into the nearest larger color before height assignment."
+        )
+        self.filament_merge_similar_colors.setChecked(self.config.filament_swap_relief.merge_similar_colors)
+        self.filament_solid_base = QCheckBox("Solid base plate")
+        self.filament_solid_base.setToolTip(
+            "Fill ignored/background pixels with the first filament height so color details sit on a solid plate."
+        )
+        self.filament_solid_base.setChecked(self.config.filament_swap_relief.solid_base_enabled)
         for control in [
             self.filament_color_count,
             self.filament_base_height,
@@ -1185,6 +1215,7 @@ class MainWindow(QMainWindow):
             signal = control.valueChanged
             signal.connect(self._refresh_filament_color_plan_estimate)
         self.filament_alignment_mode.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
+        self.filament_relief_style.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
 
         preset_group = self._form_group("Presets", [("Artwork style", self.cleanup_preset)])
         self.preset_help = QLabel("")
@@ -1285,11 +1316,13 @@ class MainWindow(QMainWindow):
             [
                 ("Width mm", self.filament_width),
                 ("Color count", self.filament_color_count),
+                ("Detail quality", self.filament_detail_quality),
                 ("Base height mm", self.filament_base_height),
                 ("Step height mm", self.filament_layer_step),
                 ("First layer height mm", self.filament_first_layer_height),
                 ("Normal layer height mm", self.filament_normal_layer_height),
                 ("Height alignment", self.filament_alignment_mode),
+                ("Relief style", self.filament_relief_style),
                 ("Palette color space", self.filament_palette_color_space),
                 ("Island handling", self.filament_island_policy),
                 ("Min region area px", self.filament_min_region_area),
@@ -1300,6 +1333,8 @@ class MainWindow(QMainWindow):
         )
         self.filament_group = filament_group
         filament_group.layout().addRow(self.filament_auto_background_ignore)
+        filament_group.layout().addRow(self.filament_merge_similar_colors)
+        filament_group.layout().addRow(self.filament_solid_base)
         advanced_section.body_layout.addWidget(filament_group)
         self.filament_plan_group = QGroupBox("Filament Color Plan")
         self.filament_plan_group.setObjectName("settingsGroup")
@@ -1501,11 +1536,13 @@ class MainWindow(QMainWindow):
         filament_controls = [
             getattr(self, "filament_width", None),
             getattr(self, "filament_color_count", None),
+            getattr(self, "filament_detail_quality", None),
             getattr(self, "filament_base_height", None),
             getattr(self, "filament_layer_step", None),
             getattr(self, "filament_first_layer_height", None),
             getattr(self, "filament_normal_layer_height", None),
             getattr(self, "filament_alignment_mode", None),
+            getattr(self, "filament_relief_style", None),
             getattr(self, "filament_palette_color_space", None),
             getattr(self, "filament_island_policy", None),
             getattr(self, "filament_min_region_area", None),
@@ -1513,6 +1550,8 @@ class MainWindow(QMainWindow):
             getattr(self, "filament_connect_gap", None),
             getattr(self, "filament_connection_width", None),
             getattr(self, "filament_auto_background_ignore", None),
+            getattr(self, "filament_merge_similar_colors", None),
+            getattr(self, "filament_solid_base", None),
         ]
         for control in contour_controls:
             if control is not None:
@@ -1878,12 +1917,16 @@ class MainWindow(QMainWindow):
             self.config.filament_swap_relief,
             width_mm=self.filament_width.value(),
             color_count=self.filament_color_count.value(),
+            max_sampled_pixels=int(self._combo_value(self.filament_detail_quality)),
             base_height_mm=self.filament_base_height.value(),
             layer_step_mm=self.filament_layer_step.value(),
             first_layer_height_mm=self.filament_first_layer_height.value(),
             layer_height_mm=self.filament_normal_layer_height.value(),
             height_alignment_mode=self._combo_value(self.filament_alignment_mode),
+            relief_style=self._combo_value(self.filament_relief_style),
             auto_background_ignore=self.filament_auto_background_ignore.isChecked(),
+            merge_similar_colors=self.filament_merge_similar_colors.isChecked(),
+            solid_base_enabled=self.filament_solid_base.isChecked(),
             min_region_area_px=self.filament_min_region_area.value(),
             palette_color_space=self._combo_value(self.filament_palette_color_space),
             island_policy=self._combo_value(self.filament_island_policy),

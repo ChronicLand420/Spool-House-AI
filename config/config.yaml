@@ -125,7 +125,7 @@ filament_swap_relief:
   auto_background_ignore: true
   background_border_sample_px: 12
   background_confidence_threshold: 0.45
-  max_sampled_pixels: 320000
+  max_sampled_pixels: 700000
   min_model_thickness_mm: 2.0
   min_region_area_px: 30
   smooth_edges: true
@@ -133,6 +133,10 @@ filament_swap_relief:
   color_order: light_to_dark
   palette_color_space: rgb
   palette_random_seed: 17
+  merge_similar_colors: true
+  similar_color_hue_tolerance_degrees: 18.0
+  similar_color_max_area_ratio: 0.12
+  solid_base_enabled: false
   island_policy: remove_below_threshold
   island_merge_max_distance_px: 8
   island_merge_fallback: remove
@@ -140,6 +144,11 @@ filament_swap_relief:
   island_connection_width_px: 1
   island_connect_fallback: remove
   island_report_components: true
+  relief_style: stacked_blocks
+  mesh_style: vector_contours
+  contour_simplify_tolerance_px: 0.45
+  contour_smoothing_enabled: true
+  contour_smoothing_strength: 2
 
 preview:
   image_size_px: 1200

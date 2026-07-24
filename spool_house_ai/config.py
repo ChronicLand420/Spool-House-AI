@@ -155,6 +155,10 @@ class FilamentSwapReliefConfig:
     color_order: str
     palette_color_space: str
     palette_random_seed: int
+    merge_similar_colors: bool
+    similar_color_hue_tolerance_degrees: float
+    similar_color_max_area_ratio: float
+    solid_base_enabled: bool
     island_policy: str
     island_merge_max_distance_px: int
     island_merge_fallback: str
@@ -162,6 +166,11 @@ class FilamentSwapReliefConfig:
     island_connection_width_px: int
     island_connect_fallback: str
     island_report_components: bool
+    relief_style: str
+    mesh_style: str
+    contour_simplify_tolerance_px: float
+    contour_smoothing_enabled: bool
+    contour_smoothing_strength: int
 
 
 @dataclass(frozen=True)
@@ -544,6 +553,18 @@ def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefCon
         {"remove", "preserve"},
         "filament_swap_relief.island_connect_fallback",
     )
+    relief_style = _choice(
+        value.get("relief_style", "stacked_blocks"),
+        "stacked_blocks",
+        {"stacked_blocks", "engraved_details"},
+        "filament_swap_relief.relief_style",
+    )
+    mesh_style = _choice(
+        value.get("mesh_style", "vector_contours"),
+        "vector_contours",
+        {"vector_contours", "pixel_heightfield"},
+        "filament_swap_relief.mesh_style",
+    )
     return FilamentSwapReliefConfig(
         width_mm=float(value.get("width_mm", 120.0)),
         color_count=int(value.get("color_count", 3)),
@@ -559,7 +580,7 @@ def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefCon
             value.get("background_confidence_threshold", 0.45),
             "filament_swap_relief.background_confidence_threshold",
         ),
-        max_sampled_pixels=int(value.get("max_sampled_pixels", 320000)),
+        max_sampled_pixels=int(value.get("max_sampled_pixels", 700000)),
         min_model_thickness_mm=_positive_float(
             value.get("min_model_thickness_mm", 2.0),
             "filament_swap_relief.min_model_thickness_mm",
@@ -575,6 +596,16 @@ def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefCon
             "filament_swap_relief.palette_color_space",
         ),
         palette_random_seed=int(value.get("palette_random_seed", 17)),
+        merge_similar_colors=bool(value.get("merge_similar_colors", True)),
+        similar_color_hue_tolerance_degrees=_nonnegative_float(
+            value.get("similar_color_hue_tolerance_degrees", 18.0),
+            "filament_swap_relief.similar_color_hue_tolerance_degrees",
+        ),
+        similar_color_max_area_ratio=_nonnegative_float(
+            value.get("similar_color_max_area_ratio", 0.12),
+            "filament_swap_relief.similar_color_max_area_ratio",
+        ),
+        solid_base_enabled=bool(value.get("solid_base_enabled", False)),
         island_policy=island_policy,
         island_merge_max_distance_px=_nonnegative_int(
             value.get("island_merge_max_distance_px", 8),
@@ -591,6 +622,17 @@ def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefCon
         ),
         island_connect_fallback=connect_fallback,
         island_report_components=bool(value.get("island_report_components", True)),
+        relief_style=relief_style,
+        mesh_style=mesh_style,
+        contour_simplify_tolerance_px=_nonnegative_float(
+            value.get("contour_simplify_tolerance_px", 0.45),
+            "filament_swap_relief.contour_simplify_tolerance_px",
+        ),
+        contour_smoothing_enabled=bool(value.get("contour_smoothing_enabled", True)),
+        contour_smoothing_strength=_nonnegative_int(
+            value.get("contour_smoothing_strength", 2),
+            "filament_swap_relief.contour_smoothing_strength",
+        ),
     )
 
 

@@ -267,18 +267,22 @@ This first version is intentionally simple: flat panels only, no curved lamp sha
 
 ### Filament Swap Relief (Experimental)
 
-Filament Swap Relief turns flat color artwork into one solid stepped-height STL for manual filament changes. Each detected printable color becomes a different final height. By default, light colors print lower and dark colors print higher, so a three-color white/red/black design becomes roughly:
+Filament Swap Relief turns flat color artwork into one solid stepped-height STL for manual filament changes. Each detected printable color becomes a different final height. By default, `Relief style = Stacked blocks`: the largest printable color becomes the base, and the remaining color groups become raised building-block layers above it. This prevents sign text, borders, and color-swap details from becoming recessed engravings just because they are brighter than the base color.
 
-- Start with the light color from `0.00 mm` to `0.80 mm`
-- Change before the layer that starts at `0.80 mm`
-- Change before the layer that starts at `1.20 mm`
-- Final height is `1.60 mm`
+For a two-color green/yellow sign, stacked blocks prints the green body as the base and raises the yellow text/border on top. If you intentionally want the older recessed/luminance behavior, choose `Relief style = Engraved / recessed`. Enable `Solid base plate` when you want ignored/background areas filled as a flat base under the artwork instead of cut away. Use `Detail quality` to trade speed/file size for smoother curves and straighter diagonal edges; High is the default, while Ultra samples more of the source image for demanding line art.
+
+With the default layer settings, a typical three-level model becomes roughly:
+
+- Start with the base color from `0.00 mm` to at least `0.80 mm`
+- Change before the layer that starts at the first raised-color transition
+- Change again before any additional raised-color transition
+- Final height is at least `2.00 mm`
 
 This is a single solid layer-cake model, not true per-layer multicolor, G-code, MMU/AMS output, or separate STL files per color. It works best with clean logos, decals, signs, anime-style title art, and other flat-color artwork. Cleanup presets, SVG tracing, detail handling, and vector/raster backend choices do not apply to this mode. No AI is used. Use artwork you own or have permission to print.
 
 Manual swap planning is layer-aware. Set the first-layer height, normal layer height, and alignment mode in the Filament Swap Relief controls. Reports use one-based layer numbers: “Change before layer N” means finish layer `N-1`, pause the printer, load the next filament, and print layer `N` with the new filament. With default `0.20 mm` first/normal layers, the default `0.80 / 0.40 mm` heights remain unchanged. If custom heights do not land on real layer starts, Spool House Studio can snap them upward, snap to nearest, or reject them in strict mode.
 
-Filament Swap Relief has its own palette and island controls. RGB palette clustering remains the default for backward-compatible output, while LAB clustering can be selected experimentally for more perceptual color grouping. Island Handling controls what happens to disconnected color components after segmentation:
+Filament Swap Relief has its own detail-quality, palette, shade-merge, and island controls. RGB palette clustering remains the default for backward-compatible output, while LAB clustering can be selected experimentally for more perceptual color grouping. Similar color shade merging is enabled by default so tiny same-hue shading or antialias clusters do not accidentally become separate filament-swap layers. Island Handling controls what happens to disconnected color components after segmentation:
 
 - `preserve_all`: keeps every post-segmentation component and reports tiny pieces as intentionally preserved.
 - `remove_below_threshold`: default behavior; removes components smaller than `min_region_area_px`.
@@ -412,13 +416,18 @@ filament_swap_relief:
   auto_background_ignore: true
   background_border_sample_px: 12
   background_confidence_threshold: 0.45
-  max_sampled_pixels: 90000
+  max_sampled_pixels: 700000
+  min_model_thickness_mm: 2.0
   min_region_area_px: 30
   smooth_edges: true
   edge_smoothing_px: 1
   color_order: light_to_dark
   palette_color_space: rgb
   palette_random_seed: 17
+  merge_similar_colors: true
+  similar_color_hue_tolerance_degrees: 18.0
+  similar_color_max_area_ratio: 0.12
+  solid_base_enabled: false
   island_policy: remove_below_threshold
   island_merge_max_distance_px: 8
   island_merge_fallback: remove
@@ -426,6 +435,11 @@ filament_swap_relief:
   island_connection_width_px: 1
   island_connect_fallback: remove
   island_report_components: true
+  relief_style: stacked_blocks
+  mesh_style: vector_contours
+  contour_simplify_tolerance_px: 0.45
+  contour_smoothing_enabled: true
+  contour_smoothing_strength: 2
 ```
 
 `stl_backend` supports:
@@ -469,7 +483,7 @@ silhouette:
   morphology_enabled: true
   morphology_kernel_size: 5
   contour_smoothing_enabled: true
-  contour_smoothing_strength: 1
+  contour_smoothing_strength: 2
   collinear_merge_tolerance: 2.0
   sharp_corner_angle_threshold: 35.0
   safe_smoothing_enabled: true
