@@ -1205,6 +1205,46 @@ class MainWindow(QMainWindow):
             "Fill ignored/background pixels with the first filament height so color details sit on a solid plate."
         )
         self.filament_solid_base.setChecked(self.config.filament_swap_relief.solid_base_enabled)
+        self.printability_enabled = QCheckBox("Enforce minimum printable geometry")
+        self.printability_enabled.setToolTip(
+            "Remove or reinforce model details that are too small to print reliably at the final physical size."
+        )
+        self.printability_enabled.setChecked(self.config.printability.enforce_minimum_printable_geometry)
+        self.printability_min_feature_width = self._double_spin(
+            0.05,
+            5.0,
+            self.config.printability.minimum_feature_width_mm,
+        )
+        self.printability_min_segment_length = self._double_spin(
+            0.05,
+            10.0,
+            self.config.printability.minimum_segment_length_mm,
+        )
+        self.printability_min_island_area = self._double_spin(
+            0.0,
+            50.0,
+            self.config.printability.minimum_island_area_mm2,
+        )
+        self.printability_min_connection_width = self._double_spin(
+            0.05,
+            5.0,
+            self.config.printability.minimum_connection_width_mm,
+        )
+        self.printability_max_mergeable_gap = self._double_spin(
+            0.0,
+            5.0,
+            self.config.printability.maximum_mergeable_gap_mm,
+        )
+        self.printability_min_hole_area = self._double_spin(
+            0.0,
+            50.0,
+            self.config.printability.minimum_hole_area_mm2,
+        )
+        self.printability_min_component_dimension = self._double_spin(
+            0.0,
+            5.0,
+            self.config.printability.minimum_component_dimension_mm,
+        )
         for control in [
             self.filament_color_count,
             self.filament_base_height,
@@ -1289,6 +1329,21 @@ class MainWindow(QMainWindow):
         cleanup_layout.addRow(self.preserve_details)
         cleanup_layout.addRow(self.background_removal)
         advanced_section.body_layout.addWidget(cleanup_group)
+
+        printability_group = self._form_group(
+            "Minimum Printable Geometry",
+            [
+                ("Minimum feature width mm", self.printability_min_feature_width),
+                ("Minimum segment length mm", self.printability_min_segment_length),
+                ("Minimum island area mm2", self.printability_min_island_area),
+                ("Minimum connection width mm", self.printability_min_connection_width),
+                ("Maximum mergeable gap mm", self.printability_max_mergeable_gap),
+                ("Minimum hole area mm2", self.printability_min_hole_area),
+                ("Minimum component dimension mm", self.printability_min_component_dimension),
+            ],
+        )
+        printability_group.layout().addRow(self.printability_enabled)
+        advanced_section.body_layout.addWidget(printability_group)
 
         keychain_group = self._form_group("Keychain", [("Hole diameter mm", self.keychain_diameter)])
         keychain_group.layout().addRow(self.keychain_hole)
@@ -1913,6 +1968,18 @@ class MainWindow(QMainWindow):
             lithophane_sharpen_strength=self.lithophane_sharpen.value(),
             lithophane_denoise_radius_px=self.lithophane_denoise.value(),
         )
+        printability = replace(
+            self.config.printability,
+            enforce_minimum_printable_geometry=self.printability_enabled.isChecked(),
+            minimum_feature_width_mm=self.printability_min_feature_width.value(),
+            minimum_segment_length_mm=self.printability_min_segment_length.value(),
+            minimum_island_area_mm2=self.printability_min_island_area.value(),
+            minimum_connection_width_mm=self.printability_min_connection_width.value(),
+            maximum_mergeable_gap_mm=self.printability_max_mergeable_gap.value(),
+            minimum_hole_area_mm2=self.printability_min_hole_area.value(),
+            minimum_component_dimension_mm=self.printability_min_component_dimension.value(),
+        )
+        stl = replace(stl, printability=printability)
         filament_swap_relief = replace(
             self.config.filament_swap_relief,
             width_mm=self.filament_width.value(),
@@ -1933,6 +2000,7 @@ class MainWindow(QMainWindow):
             island_merge_max_distance_px=self.filament_merge_distance.value(),
             island_connect_max_gap_px=self.filament_connect_gap.value(),
             island_connection_width_px=self.filament_connection_width.value(),
+            printability=printability,
         )
         return replace(
             self.config,
@@ -1941,6 +2009,7 @@ class MainWindow(QMainWindow):
             silhouette=silhouette,
             svg=svg,
             stl=stl,
+            printability=printability,
             filament_swap_relief=filament_swap_relief,
         )
 

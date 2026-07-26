@@ -14,6 +14,7 @@ from spool_house_ai.processing.filament_layers import calculate_filament_swap_pl
 from spool_house_ai.processing.generic_3mf import GENERIC_3MF_NOTICE
 from spool_house_ai.processing.geometry import smooth_contour_points
 from spool_house_ai.processing.islands import apply_island_policy
+from spool_house_ai.processing.printability import enforce_printable_height_map
 from spool_house_ai.processing.stl import StlCreationResult, export_generic_3mf_for_stl_mesh
 
 
@@ -95,6 +96,14 @@ def create_filament_swap_relief_stl(
         config,
         source_metadata=source_metadata,
     )
+    height_map, printability_report = enforce_printable_height_map(
+        height_map,
+        width_mm=config.width_mm,
+        config=config.printability,
+        product_mode="filament_swap_relief",
+        generation_path="filament_swap_heightfield",
+    )
+    warnings.extend(printability_report.get("unresolved_printability_warnings") or [])
     height_map, topology_repair_pixels = _resolve_height_level_diagonal_contacts(height_map)
     if topology_repair_pixels:
         warnings.append(
@@ -196,6 +205,7 @@ def create_filament_swap_relief_stl(
         "removed_region_count": island_result.summary["removed_components"],
         "removed_pixel_count": island_result.summary["pixels_removed"],
         "preserved_region_count": island_result.summary["intentionally_preserved_components"],
+        "printability_report": printability_report,
         "warnings": warnings,
     }
     metadata.update(load_metadata)
@@ -261,6 +271,7 @@ def create_filament_swap_relief_stl(
             fallback_used=False,
             fallback_reason="",
             generic_3mf_metadata=generic_3mf_metadata,
+            printability_report=printability_report,
         ),
         metadata,
     )

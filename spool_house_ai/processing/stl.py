@@ -18,6 +18,12 @@ from spool_house_ai.processing.generic_3mf import (
     GENERIC_3MF_NOTICE,
     export_generic_3mf,
 )
+from spool_house_ai.processing.printability import (
+    enforce_printable_mask,
+    enforce_printable_polygons,
+    empty_printability_report,
+    validate_lithophane_printability,
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,7 @@ class StlCreationResult:
     fallback_used: bool
     fallback_reason: str
     generic_3mf_metadata: dict[str, Any] = field(default_factory=dict)
+    printability_report: dict[str, Any] = field(default_factory=dict)
 
 
 def create_relief_stl(
@@ -63,7 +70,7 @@ def create_relief_stl(
         raise ValueError("Lithophane uses create_lithophane_stl instead of the relief STL pipeline.")
     if config.stl_backend in {"auto_vector_first", "vector_extrusion"}:
         try:
-            mesh = _create_vector_extrusion_stl(analysis, output_path, config)
+            mesh, printability_report = _create_vector_extrusion_stl(analysis, output_path, config)
             vector_report = validate_stl_mesh(output_path)
             if not _mesh_report_is_safe_for_vector_backend(vector_report):
                 raise RuntimeError(
@@ -84,9 +91,10 @@ def create_relief_stl(
                 fallback_used=False,
                 fallback_reason="",
                 generic_3mf_metadata=generic_metadata,
+                printability_report=printability_report,
             )
         except (ImportError, RuntimeError, ValueError, AttributeError) as error:
-            mesh = _create_raster_heightfield_stl(analysis, output_path, config)
+            mesh, printability_report = _create_raster_heightfield_stl(analysis, output_path, config)
             generic_metadata = export_generic_3mf_for_stl_mesh(
                 mesh,
                 generic_3mf_path,
@@ -99,12 +107,13 @@ def create_relief_stl(
                 fallback_used=True,
                 fallback_reason=str(error),
                 generic_3mf_metadata=generic_metadata,
+                printability_report=printability_report,
             )
 
     if config.stl_backend != "raster_heightfield":
         raise ValueError(f"Unsupported stl_backend: {config.stl_backend}")
 
-    mesh = _create_raster_heightfield_stl(analysis, output_path, config)
+    mesh, printability_report = _create_raster_heightfield_stl(analysis, output_path, config)
     generic_metadata = export_generic_3mf_for_stl_mesh(
         mesh,
         generic_3mf_path,
@@ -117,6 +126,7 @@ def create_relief_stl(
         fallback_used=False,
         fallback_reason="",
         generic_3mf_metadata=generic_metadata,
+        printability_report=printability_report,
     )
 
 
@@ -142,6 +152,12 @@ def create_lithophane_stl(
         invert=config.lithophane_invert,
     )
     mesh, bounds_metadata = _lithophane_mesh_from_thickness(thickness, config.lithophane_width_mm)
+    printability_report = validate_lithophane_printability(
+        mesh,
+        config=config.printability,
+        product_mode="lithophane",
+        generation_path="lithophane_heightfield",
+    )
     mesh.export(output_path)
     generic_3mf_metadata = export_generic_3mf_for_stl_mesh(
         mesh,
@@ -184,6 +200,7 @@ def create_lithophane_stl(
                 "denoise_radius_px": config.lithophane_denoise_radius_px,
                 "processed_preview_path": str(processed_preview_path) if processed_preview_path else "",
             },
+            "printability_report": printability_report,
         }
     )
     return (
@@ -193,6 +210,7 @@ def create_lithophane_stl(
             fallback_used=False,
             fallback_reason="",
             generic_3mf_metadata=generic_3mf_metadata,
+            printability_report=printability_report,
         ),
         metadata,
     )
@@ -279,7 +297,11 @@ def _preprocess_lithophane_image(image: Image.Image, config: StlConfig) -> Image
     return processed
 
 
-def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> trimesh.Trimesh:
+def _create_raster_heightfield_stl(
+    analysis: ImageAnalysis | np.ndarray,
+    output_path: Path,
+    config: StlConfig,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     mask = _mask_for_stl(analysis, config)
     mask = _prepare_product_mask(mask, config)
@@ -288,6 +310,20 @@ def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_
     height, width = resized_mask.shape
 
     scale = config.output_scale_mm / width
+    resized_mask, printability_report = enforce_printable_mask(
+        resized_mask,
+        scale_x_mm=scale,
+        scale_y_mm=scale,
+        config=config.printability,
+        product_mode=config.product_mode,
+        generation_path="raster_heightfield",
+        preset=getattr(config.printability, "cleanup_preset", ""),
+    )
+    if detail_mask is not None:
+        detail_mask = detail_mask & resized_mask
+    if color_masks:
+        color_masks = [value & resized_mask for value in color_masks]
+    height, width = resized_mask.shape
     depth_mm = height * scale
     top_heights = _top_heights(resized_mask, config, detail_mask, color_masks)
     bottom_z = 0.0
@@ -338,10 +374,14 @@ def _create_raster_heightfield_stl(analysis: ImageAnalysis | np.ndarray, output_
 
     mesh = trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=True)
     mesh.export(output_path)
-    return mesh
+    return mesh, printability_report
 
 
-def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_path: Path, config: StlConfig) -> trimesh.Trimesh:
+def _create_vector_extrusion_stl(
+    analysis: ImageAnalysis | np.ndarray,
+    output_path: Path,
+    config: StlConfig,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not isinstance(analysis, ImageAnalysis) or not analysis.vector_contours:
         raise ValueError("Vector extrusion requires analyzed vector contours.")
@@ -400,6 +440,14 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
 
     merged = unary_union(polygons)
     merged_polygons = _valid_polygon_parts(merged)
+    merged_polygons, printability_report = enforce_printable_polygons(
+        merged_polygons,
+        config=config.printability,
+        product_mode=config.product_mode,
+        generation_path="vector_extrusion",
+    )
+    if not merged_polygons:
+        raise ValueError("Minimum printable geometry cleanup removed every vector component.")
     mesh = _extrude_polygon_parts(merged_polygons, extrusion_height)
     if not _vector_mesh_is_safe(mesh):
         repaired_polygons = _repair_polygon_parts_for_extrusion(merged_polygons, scale)
@@ -417,7 +465,7 @@ def _create_vector_extrusion_stl(analysis: ImageAnalysis | np.ndarray, output_pa
             )
 
     mesh.export(output_path)
-    return mesh
+    return mesh, printability_report
 
 
 def _extrude_polygon_parts(polygons: list, extrusion_height: float) -> trimesh.Trimesh:

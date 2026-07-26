@@ -127,6 +127,19 @@ class StlConfig:
     lithophane_gamma: float
     lithophane_sharpen_strength: float
     lithophane_denoise_radius_px: int
+    printability: PrintabilityConfig
+
+
+@dataclass(frozen=True)
+class PrintabilityConfig:
+    enforce_minimum_printable_geometry: bool
+    minimum_feature_width_mm: float
+    minimum_segment_length_mm: float
+    minimum_island_area_mm2: float
+    minimum_connection_width_mm: float
+    maximum_mergeable_gap_mm: float
+    minimum_hole_area_mm2: float
+    minimum_component_dimension_mm: float
 
 
 @dataclass(frozen=True)
@@ -171,6 +184,7 @@ class FilamentSwapReliefConfig:
     contour_simplify_tolerance_px: float
     contour_smoothing_enabled: bool
     contour_smoothing_strength: int
+    printability: PrintabilityConfig
 
 
 @dataclass(frozen=True)
@@ -184,6 +198,7 @@ class AppConfig:
     silhouette: SilhouetteConfig
     svg: SvgConfig
     stl: StlConfig
+    printability: PrintabilityConfig
     filament_swap_relief: FilamentSwapReliefConfig
     preview: PreviewConfig
 
@@ -203,6 +218,8 @@ def load_config(config_path: Path) -> AppConfig:
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    printability = _printability_config(raw_config.get("printability", {}))
+
     return AppConfig(
         project_root=project_root,
         input_dir=input_dir,
@@ -212,8 +229,9 @@ def load_config(config_path: Path) -> AppConfig:
         watcher=_watcher_config(raw_config.get("watcher", {})),
         silhouette=_silhouette_config(raw_config.get("silhouette", {})),
         svg=_svg_config(raw_config.get("svg", {})),
-        stl=_stl_config(raw_config.get("stl", {})),
-        filament_swap_relief=_filament_swap_relief_config(raw_config.get("filament_swap_relief", {})),
+        stl=_stl_config(raw_config.get("stl", {}), printability),
+        printability=printability,
+        filament_swap_relief=_filament_swap_relief_config(raw_config.get("filament_swap_relief", {}), printability),
         preview=_preview_config(raw_config.get("preview", {})),
     )
 
@@ -476,7 +494,8 @@ def _svg_config(value: dict[str, Any]) -> SvgConfig:
     )
 
 
-def _stl_config(value: dict[str, Any]) -> StlConfig:
+def _stl_config(value: dict[str, Any], printability: PrintabilityConfig | None = None) -> StlConfig:
+    printability = printability or _printability_config({})
     return StlConfig(
         stl_backend=str(value.get("stl_backend", "auto_vector_first")),
         product_mode=str(value.get("product_mode", "flat_relief")),
@@ -507,6 +526,41 @@ def _stl_config(value: dict[str, Any]) -> StlConfig:
         lithophane_gamma=float(value.get("lithophane_gamma", 1.0)),
         lithophane_sharpen_strength=float(value.get("lithophane_sharpen_strength", 0.0)),
         lithophane_denoise_radius_px=int(value.get("lithophane_denoise_radius_px", 0)),
+        printability=printability,
+    )
+
+
+def _printability_config(value: dict[str, Any]) -> PrintabilityConfig:
+    return PrintabilityConfig(
+        enforce_minimum_printable_geometry=bool(value.get("enforce_minimum_printable_geometry", True)),
+        minimum_feature_width_mm=_positive_float(
+            value.get("minimum_feature_width_mm", 0.8),
+            "printability.minimum_feature_width_mm",
+        ),
+        minimum_segment_length_mm=_positive_float(
+            value.get("minimum_segment_length_mm", 1.5),
+            "printability.minimum_segment_length_mm",
+        ),
+        minimum_island_area_mm2=_nonnegative_float(
+            value.get("minimum_island_area_mm2", 2.0),
+            "printability.minimum_island_area_mm2",
+        ),
+        minimum_connection_width_mm=_positive_float(
+            value.get("minimum_connection_width_mm", 0.8),
+            "printability.minimum_connection_width_mm",
+        ),
+        maximum_mergeable_gap_mm=_nonnegative_float(
+            value.get("maximum_mergeable_gap_mm", 0.6),
+            "printability.maximum_mergeable_gap_mm",
+        ),
+        minimum_hole_area_mm2=_nonnegative_float(
+            value.get("minimum_hole_area_mm2", 1.0),
+            "printability.minimum_hole_area_mm2",
+        ),
+        minimum_component_dimension_mm=_nonnegative_float(
+            value.get("minimum_component_dimension_mm", 0.8),
+            "printability.minimum_component_dimension_mm",
+        ),
     )
 
 
@@ -514,7 +568,11 @@ def _preview_config(value: dict[str, Any]) -> PreviewConfig:
     return PreviewConfig(image_size_px=int(value.get("image_size_px", 1200)))
 
 
-def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefConfig:
+def _filament_swap_relief_config(
+    value: dict[str, Any],
+    printability: PrintabilityConfig | None = None,
+) -> FilamentSwapReliefConfig:
+    printability = printability or _printability_config({})
     height_alignment_mode = _choice(
         value.get("height_alignment_mode", "snap_up"),
         "snap_up",
@@ -633,6 +691,7 @@ def _filament_swap_relief_config(value: dict[str, Any]) -> FilamentSwapReliefCon
             value.get("contour_smoothing_strength", 2),
             "filament_swap_relief.contour_smoothing_strength",
         ),
+        printability=printability,
     )
 
 

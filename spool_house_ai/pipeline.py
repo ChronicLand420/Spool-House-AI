@@ -123,6 +123,7 @@ class ImagePipeline:
                     generic_3mf_path=paths.generic_3mf_path,
                 )
                 _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
+                _append_printability_warnings(warnings, stl_result.printability_report)
                 if lithophane_metadata.get("source_downscaled"):
                     message = (
                         "Lithophane image was downscaled to "
@@ -207,6 +208,7 @@ class ImagePipeline:
                         warnings.append(warning)
                         self.logger.warning(warning)
                 _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
+                _append_printability_warnings(warnings, stl_result.printability_report)
                 _emit(stage_callback, "Detail Analyzer", "done", "Color height plan prepared", cleaned_png_path)
                 _emit(stage_callback, "Vector Workshop", "done", "SVG not applicable for filament swaps", None)
                 self.logger.info("Filament swap backend used: %s", stl_result.actual_backend)
@@ -362,6 +364,7 @@ class ImagePipeline:
             _emit(stage_callback, "Mesh Forge", "active", "Generating printable mesh", svg_path)
             stl_result = create_relief_stl(analysis, stl_path, self.config.stl, generic_3mf_path=paths.generic_3mf_path)
             _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
+            _append_printability_warnings(warnings, stl_result.printability_report)
             self.logger.info("STL backend requested: %s", stl_result.requested_backend)
             self.logger.info("STL backend used: %s", stl_result.actual_backend)
             if stl_result.fallback_used:
@@ -444,6 +447,15 @@ def _append_generic_3mf_warnings(warnings: list[str], metadata: dict[str, Any] |
         warnings.append(message)
 
 
+def _append_printability_warnings(warnings: list[str], report: dict[str, Any] | None) -> None:
+    if not report:
+        return
+    for warning in report.get("unresolved_printability_warnings") or []:
+        message = f"Printability warning: {warning}"
+        if message not in warnings:
+            warnings.append(message)
+
+
 def _log_generic_3mf(logger: logging.Logger, stl_result: StlCreationResult | None, paths: JobOutputPaths) -> None:
     metadata = (stl_result.generic_3mf_metadata if stl_result else {}) or {}
     if metadata.get("generic_3mf_created"):
@@ -476,6 +488,15 @@ def _write_job_settings(path: Path, config: AppConfig) -> None:
         f"  lithophane_gamma: {config.stl.lithophane_gamma}",
         f"  lithophane_sharpen_strength: {config.stl.lithophane_sharpen_strength}",
         f"  lithophane_denoise_radius_px: {config.stl.lithophane_denoise_radius_px}",
+        "printability:",
+        f"  enforce_minimum_printable_geometry: {str(config.printability.enforce_minimum_printable_geometry).lower()}",
+        f"  minimum_feature_width_mm: {config.printability.minimum_feature_width_mm}",
+        f"  minimum_segment_length_mm: {config.printability.minimum_segment_length_mm}",
+        f"  minimum_island_area_mm2: {config.printability.minimum_island_area_mm2}",
+        f"  minimum_connection_width_mm: {config.printability.minimum_connection_width_mm}",
+        f"  maximum_mergeable_gap_mm: {config.printability.maximum_mergeable_gap_mm}",
+        f"  minimum_hole_area_mm2: {config.printability.minimum_hole_area_mm2}",
+        f"  minimum_component_dimension_mm: {config.printability.minimum_component_dimension_mm}",
         f"  filament_swap_width_mm: {config.filament_swap_relief.width_mm}",
         f"  filament_swap_color_count: {config.filament_swap_relief.color_count}",
         f"  filament_swap_base_height_mm: {config.filament_swap_relief.base_height_mm}",
@@ -565,6 +586,7 @@ def _write_job_status(
 ) -> dict[str, Any]:
     svg_applicable = config.stl.product_mode not in {"lithophane", "filament_swap_relief"}
     generic_3mf_summary = _generic_3mf_status_summary(stl_result, lithophane_metadata, filament_swap_metadata)
+    printability_summary = _printability_status_summary(stl_result, lithophane_metadata, filament_swap_metadata)
     payload = {
         "app_version": _load_app_version(config.project_root),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -648,12 +670,21 @@ def _write_job_status(
             "filament_swap_island_connect_max_gap_px": config.filament_swap_relief.island_connect_max_gap_px,
             "filament_swap_island_connection_width_px": config.filament_swap_relief.island_connection_width_px,
             "generic_3mf_export": "automatic",
+            "minimum_printable_geometry_enforced": config.printability.enforce_minimum_printable_geometry,
+            "minimum_feature_width_mm": config.printability.minimum_feature_width_mm,
+            "minimum_segment_length_mm": config.printability.minimum_segment_length_mm,
+            "minimum_island_area_mm2": config.printability.minimum_island_area_mm2,
+            "minimum_connection_width_mm": config.printability.minimum_connection_width_mm,
+            "maximum_mergeable_gap_mm": config.printability.maximum_mergeable_gap_mm,
+            "minimum_hole_area_mm2": config.printability.minimum_hole_area_mm2,
+            "minimum_component_dimension_mm": config.printability.minimum_component_dimension_mm,
         },
         "settings_used": {
             "pipeline": asdict(config.pipeline),
             "silhouette": asdict(config.silhouette),
             "svg": asdict(config.svg),
             "stl": asdict(config.stl),
+            "printability": asdict(config.printability),
             "filament_swap_relief": asdict(config.filament_swap_relief),
         },
         "warnings": warnings,
@@ -662,6 +693,7 @@ def _write_job_status(
         "lithophane_summary": lithophane_metadata or {},
         "filament_swap_summary": _filament_swap_status_summary(filament_swap_metadata),
         "generic_3mf_summary": generic_3mf_summary,
+        "printability_summary": printability_summary,
         "mesh_summary": _mesh_summary(mesh_report),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -674,6 +706,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
     lithophane = status.get("lithophane_summary") or {}
     filament_swap = status.get("filament_swap_summary") or {}
     generic_3mf = status.get("generic_3mf_summary") or {}
+    printability = status.get("printability_summary") or {}
     warnings = status.get("warnings") or []
     failures = status.get("failures") or []
     if failures:
@@ -743,6 +776,23 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Removed islands: `{artifact.get('removed_island_count', 0)}`",
         f"- Preserved islands: `{artifact.get('preserved_island_count', 0)}`",
         f"- Preserved details: `{artifact.get('preserved_detail_count', 0)}`",
+        "",
+        "## Minimum Printable Geometry",
+        f"- Enforcement enabled: `{printability.get('enforcement_enabled', False)}`",
+        f"- Generation paths: `{printability.get('paths_invoked', [])}`",
+        f"- Minimum feature width mm: `{(printability.get('thresholds') or {}).get('minimum_feature_width_mm', '')}`",
+        f"- Minimum segment length mm: `{(printability.get('thresholds') or {}).get('minimum_segment_length_mm', '')}`",
+        f"- Minimum island area mm2: `{(printability.get('thresholds') or {}).get('minimum_island_area_mm2', '')}`",
+        f"- Removed short segments: `{printability.get('removed_short_segments', 0)}`",
+        f"- Removed islands: `{printability.get('removed_islands', 0)}`",
+        f"- Removed slivers: `{printability.get('removed_slivers', 0)}`",
+        f"- Removed partial-color fragments: `{printability.get('removed_partial_color_fragments', 0)}`",
+        f"- Thickened features: `{printability.get('thickened_features', 0)}`",
+        f"- Closed gaps: `{printability.get('closed_gaps', 0)}`",
+        f"- Reinforced connections: `{printability.get('reinforced_connections', 0)}`",
+        f"- Removed or filled tiny holes: `{printability.get('removed_or_filled_tiny_holes', 0)}`",
+        f"- Smallest retained feature width mm: `{printability.get('smallest_retained_feature_width_mm', '')}`",
+        f"- Smallest retained component area mm2: `{printability.get('smallest_retained_component_area_mm2', '')}`",
         "",
     ]
     if lithophane:
@@ -945,6 +995,21 @@ def _generic_3mf_status_summary(
         "generic_export_notice",
     }
     return {key: source.get(key) for key in keys if key in source}
+
+
+def _printability_status_summary(
+    stl_result: StlCreationResult | None,
+    lithophane_metadata: dict[str, Any] | None,
+    filament_swap_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    source = (stl_result.printability_report if stl_result else None) or {}
+    if not source and filament_swap_metadata:
+        source = filament_swap_metadata.get("printability_report") or {}
+    if not source and lithophane_metadata:
+        source = lithophane_metadata.get("printability_report") or {}
+    if not source:
+        return {}
+    return source
 
 
 def _filament_swap_status_summary(metadata: dict[str, Any] | None) -> dict[str, Any]:

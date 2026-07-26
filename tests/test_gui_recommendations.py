@@ -86,6 +86,35 @@ class GuiRecommendationTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_printability_controls_feed_shared_config(self) -> None:
+        window = MainWindow()
+        try:
+            self.assertTrue(hasattr(window, "printability_enabled"))
+            self.assertTrue(hasattr(window, "printability_min_feature_width"))
+            window.printability_enabled.setChecked(False)
+            window.printability_min_feature_width.setValue(1.2)
+            window.printability_min_segment_length.setValue(2.4)
+            window.printability_min_island_area.setValue(3.6)
+            window.printability_min_connection_width.setValue(1.0)
+            window.printability_max_mergeable_gap.setValue(0.4)
+            window.printability_min_hole_area.setValue(1.8)
+            window.printability_min_component_dimension.setValue(0.9)
+
+            config = window._config_from_controls()
+
+            self.assertFalse(config.printability.enforce_minimum_printable_geometry)
+            self.assertAlmostEqual(config.printability.minimum_feature_width_mm, 1.2)
+            self.assertAlmostEqual(config.printability.minimum_segment_length_mm, 2.4)
+            self.assertAlmostEqual(config.printability.minimum_island_area_mm2, 3.6)
+            self.assertAlmostEqual(config.printability.minimum_connection_width_mm, 1.0)
+            self.assertAlmostEqual(config.printability.maximum_mergeable_gap_mm, 0.4)
+            self.assertAlmostEqual(config.printability.minimum_hole_area_mm2, 1.8)
+            self.assertAlmostEqual(config.printability.minimum_component_dimension_mm, 0.9)
+            self.assertEqual(config.stl.printability, config.printability)
+            self.assertEqual(config.filament_swap_relief.printability, config.printability)
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
