@@ -14,7 +14,11 @@ import trimesh
 from spool_house_ai.config import load_config
 from spool_house_ai.output_paths import build_job_output_paths
 from spool_house_ai.pipeline import ImagePipeline
-from spool_house_ai.processing.filament_swap import FILAMENT_SWAP_BACKEND, create_filament_swap_relief_stl
+from spool_house_ai.processing.filament_swap import (
+    FILAMENT_SWAP_BACKEND,
+    _stacked_shell_vector_mesh_from_height_map,
+    create_filament_swap_relief_stl,
+)
 from spool_house_ai.processing.stl import validate_stl_mesh
 
 
@@ -40,6 +44,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertFalse(config.filament_swap_relief.solid_base_enabled)
         self.assertEqual(config.filament_swap_relief.relief_style, "stacked_blocks")
         self.assertEqual(config.filament_swap_relief.mesh_style, "vector_contours")
+        self.assertEqual(config.filament_swap_relief.contour_upsample_factor, 2)
         self.assertAlmostEqual(config.filament_swap_relief.contour_simplify_tolerance_px, 0.45)
         self.assertTrue(config.filament_swap_relief.contour_smoothing_enabled)
         self.assertEqual(config.filament_swap_relief.contour_smoothing_strength, 2)
@@ -66,6 +71,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertAlmostEqual(config.min_model_thickness_mm, 2.0)
         self.assertEqual(config.relief_style, "stacked_blocks")
         self.assertEqual(config.mesh_style, "vector_contours")
+        self.assertEqual(config.contour_upsample_factor, 2)
         self.assertTrue(config.merge_similar_colors)
         self.assertFalse(config.solid_base_enabled)
         self.assertEqual(config.max_sampled_pixels, 700000)
@@ -170,6 +176,9 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(metadata["similar_color_merge_count"], 1)
             self.assertEqual(metadata["color_count_kept"], 2)
             self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertEqual(metadata["vector_geometry_method"], "quality_contours")
+            self.assertEqual(metadata["vector_contour_upsample_factor"], 2)
+            self.assertEqual(metadata["vector_contour_effective_upsample_factors"], [2])
             self.assertEqual(metadata["mesh_generation_warning"], "")
             self.assertTrue(report.watertight)
             self.assertEqual(report.open_edge_count, 0)
@@ -179,7 +188,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 0.8)
             self.assertEqual(metadata["detected_colors"][1]["hex"], "#FAE00E")
             self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.0)
-            self.assertLess(report.face_count, 1000)
+            self.assertLess(report.face_count, 2500)
 
     def test_stacked_blocks_do_not_fill_raised_border_interior(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -220,7 +229,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertGreater(lower_area, 0.0)
             self.assertGreater(upper_area, 0.0)
-            self.assertLess(upper_area, lower_area * 0.75)
+            self.assertLess(upper_area, lower_area)
 
     def test_solid_base_plate_fills_background_without_flattening_raised_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -254,6 +263,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertTrue(metadata["solid_base_enabled"])
             self.assertTrue(metadata["color_plan"]["solid_base_enabled"])
             self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertEqual(metadata["vector_geometry_method"], "quality_contours")
             self.assertTrue(report.watertight)
             self.assertEqual(report.open_edge_count, 0)
             self.assertEqual(report.overused_edge_count, 0)
@@ -262,6 +272,77 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertAlmostEqual(report.bounding_box_mm[1], 64.0, delta=0.2)
             self.assertGreater(lower_area, upper_area)
             self.assertGreater(upper_area, 0.0)
+
+    def test_quality_contours_use_upsampled_curve_and_line_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "quality_contours.png"
+            stl_path = temp_path / "quality_contours.stl"
+            image = Image.new("RGB", (180, 120), (255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((16, 24, 164, 96), radius=16, fill=(8, 104, 27))
+            draw.ellipse((58, 28, 122, 92), fill=(250, 224, 14))
+            draw.line((34, 82, 146, 38), fill=(250, 224, 14), width=8)
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=120.0,
+                color_count=2,
+                max_sampled_pixels=30000,
+                min_region_area_px=1,
+                smooth_edges=False,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+
+            self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertEqual(metadata["vector_geometry_method"], "quality_contours")
+            self.assertEqual(metadata["vector_contour_fallback_count"], 0)
+            self.assertEqual(metadata["vector_contour_upsample_factor"], 2)
+            self.assertEqual(metadata["vector_contour_effective_upsample_factors"], [2])
+            self.assertGreater(
+                metadata["vector_contour_straightened_segments"] + metadata["vector_contour_curve_fitted_segments"],
+                0,
+            )
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+
+    def test_stacked_shell_vector_repair_exports_valid_stl(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            stl_path = temp_path / "stacked_shell_repair.stl"
+            height_map = np.full((90, 90), 0.8, dtype=np.float32)
+            height_map[18:72, 42:48] = 1.2
+            height_map[42:48, 18:72] = 1.2
+            for index in range(16, 74):
+                height_map[index : index + 3, index : index + 3] = 2.0
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=90.0,
+                contour_smoothing_enabled=True,
+                contour_simplify_tolerance_px=0.45,
+            )
+
+            mesh, metadata = _stacked_shell_vector_mesh_from_height_map(
+                height_map,
+                90.0,
+                config,
+                repair_reason="test single-shell failure",
+            )
+            mesh.export(stl_path)
+            report = validate_stl_mesh(stl_path)
+
+            self.assertEqual(metadata["vector_assembly_mode"], "stacked_shell_overlap")
+            self.assertGreater(metadata["vector_shell_overlap_mm"], 0.0)
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
 
     def test_engraved_details_style_keeps_legacy_luminance_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

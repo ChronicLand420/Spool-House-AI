@@ -181,6 +181,7 @@ class FilamentSwapReliefConfig:
     island_report_components: bool
     relief_style: str
     mesh_style: str
+    contour_upsample_factor: int
     contour_simplify_tolerance_px: float
     contour_smoothing_enabled: bool
     contour_smoothing_strength: int
@@ -682,6 +683,10 @@ def _filament_swap_relief_config(
         island_report_components=bool(value.get("island_report_components", True)),
         relief_style=relief_style,
         mesh_style=mesh_style,
+        contour_upsample_factor=max(
+            1,
+            _nonnegative_int(value.get("contour_upsample_factor", 2), "filament_swap_relief.contour_upsample_factor"),
+        ),
         contour_simplify_tolerance_px=_nonnegative_float(
             value.get("contour_simplify_tolerance_px", 0.45),
             "filament_swap_relief.contour_simplify_tolerance_px",

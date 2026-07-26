@@ -12,13 +12,16 @@ from PIL import Image, ImageDraw
 from spool_house_ai.config import FilamentSwapReliefConfig
 from spool_house_ai.processing.filament_layers import calculate_filament_swap_plan
 from spool_house_ai.processing.generic_3mf import GENERIC_3MF_NOTICE
-from spool_house_ai.processing.geometry import smooth_contour_points
+from spool_house_ai.processing.geometry import extract_vector_contours, smooth_contour_points
 from spool_house_ai.processing.islands import apply_island_policy
 from spool_house_ai.processing.printability import enforce_printable_height_map
 from spool_house_ai.processing.stl import StlCreationResult, export_generic_3mf_for_stl_mesh
 
 
 FILAMENT_SWAP_BACKEND = "filament_swap_heightfield"
+MAX_FILAMENT_CONTOUR_PIXELS = 1_500_000
+FILAMENT_VECTOR_SHELL_OVERLAP_MM = 0.01
+FILAMENT_VECTOR_POLYGON_REPAIR_FACTORS = (0.0, 0.02, 0.05, 0.1)
 
 
 def create_filament_swap_relief_stl(
@@ -775,6 +778,23 @@ def _mesh_from_height_map(
             )
         except Exception as error:
             fallback_reason = f"Vector-contour filament mesh failed: {error}"
+        try:
+            mesh, metadata = _stacked_shell_vector_mesh_from_height_map(
+                height_map,
+                width_mm,
+                config,
+                repair_reason=fallback_reason,
+            )
+            if _mesh_is_safe(mesh):
+                return mesh, metadata
+            open_edges, overused_edges, non_manifold_edges = _mesh_edge_counts(mesh)
+            fallback_reason = (
+                f"{fallback_reason} Stacked-shell vector repair did not validate "
+                f"(watertight: {mesh.is_watertight}, open edges: {open_edges}, "
+                f"overused edges: {overused_edges}, non-manifold edges: {non_manifold_edges})."
+            )
+        except Exception as error:
+            fallback_reason = f"{fallback_reason} Stacked-shell vector repair failed: {error}"
         pixel_mesh, pixel_metadata = _pixel_mesh_from_height_map(height_map, width_mm)
         pixel_metadata["mesh_generation_warning"] = f"{fallback_reason} Used pixel heightfield fallback."
         pixel_metadata["mesh_generation_mode"] = "pixel_heightfield"
@@ -867,37 +887,11 @@ def _vector_mesh_from_height_map(
     width_mm: float,
     config: FilamentSwapReliefConfig,
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
-    height_px, width_px = height_map.shape
-    if height_px < 1 or width_px < 1:
-        raise ValueError("Filament Swap Relief height map did not contain pixels.")
-    if width_mm <= 0:
-        raise ValueError("Filament Swap Relief width must be greater than zero.")
-    if not np.any(height_map > 0):
-        raise ValueError("Filament Swap Relief height map has no printable pixels.")
-
-    try:
-        import shapely  # noqa: F401
-    except ImportError as error:
-        raise ImportError("Vector-contour filament mesh requires optional polygon dependencies.") from error
-
-    height_mm = width_mm * (height_px / width_px)
-    scale_x = width_mm / width_px
-    scale_y = height_mm / height_px
-    levels = sorted(float(value) for value in np.unique(height_map[height_map > 0]))
-    cumulative_geometries = []
-    contour_count = 0
-    polygon_count = 0
-
-    for index, level in enumerate(levels):
-        mask = height_map >= (level - 1e-6)
-        geometry, stats = _mask_to_geometry(mask, scale_x, scale_y, height_mm, config)
-        if index > 0:
-            geometry = _clean_geometry(geometry.intersection(cumulative_geometries[index - 1]))
-        if geometry.is_empty:
-            raise ValueError(f"Vector-contour filament mesh had no geometry at height {level:.4f} mm.")
-        cumulative_geometries.append(geometry)
-        contour_count += stats["contours"]
-        polygon_count += len(_geometry_polygons(geometry))
+    height_mm, _scale_x, _scale_y, levels, cumulative_geometries, metadata = _vector_level_geometries(
+        height_map,
+        width_mm,
+        config,
+    )
 
     vertices: list[tuple[float, float, float]] = []
     vertex_lookup: dict[tuple[float, float, float], int] = {}
@@ -944,7 +938,64 @@ def _vector_mesh_from_height_map(
         raise ValueError("Vector-contour filament mesh did not create any faces.")
     mesh = trimesh.Trimesh(vertices=np.array(vertices), faces=np.array(faces), process=True)
     mesh.fix_normals()
-    return mesh, {
+    metadata.update(
+        {
+            "vector_assembly_mode": "single_shell",
+            "vector_shell_overlap_mm": 0.0,
+            "vector_polygon_repair_count": 0,
+        }
+    )
+    return mesh, metadata
+
+
+def _vector_level_geometries(
+    height_map: np.ndarray,
+    width_mm: float,
+    config: FilamentSwapReliefConfig,
+):
+    height_px, width_px = height_map.shape
+    if height_px < 1 or width_px < 1:
+        raise ValueError("Filament Swap Relief height map did not contain pixels.")
+    if width_mm <= 0:
+        raise ValueError("Filament Swap Relief width must be greater than zero.")
+    if not np.any(height_map > 0):
+        raise ValueError("Filament Swap Relief height map has no printable pixels.")
+
+    try:
+        import shapely  # noqa: F401
+    except ImportError as error:
+        raise ImportError("Vector-contour filament mesh requires optional polygon dependencies.") from error
+
+    height_mm = width_mm * (height_px / width_px)
+    scale_x = width_mm / width_px
+    scale_y = height_mm / height_px
+    levels = sorted(float(value) for value in np.unique(height_map[height_map > 0]))
+    cumulative_geometries = []
+    contour_count = 0
+    polygon_count = 0
+    contour_geometry_fallback_count = 0
+    contour_straightened_segments = 0
+    contour_curve_fitted_segments = 0
+    contour_rejected_cleanup_count = 0
+    effective_upsample_factors: list[int] = []
+
+    for index, level in enumerate(levels):
+        mask = height_map >= (level - 1e-6)
+        geometry, stats = _mask_to_geometry(mask, scale_x, scale_y, height_mm, config)
+        if index > 0:
+            geometry = _clean_geometry(geometry.intersection(cumulative_geometries[index - 1]))
+        if geometry.is_empty:
+            raise ValueError(f"Vector-contour filament mesh had no geometry at height {level:.4f} mm.")
+        cumulative_geometries.append(geometry)
+        contour_count += stats["contours"]
+        polygon_count += len(_geometry_polygons(geometry))
+        contour_geometry_fallback_count += int(stats.get("contour_geometry_fallback_count", 0))
+        contour_straightened_segments += int(stats.get("straightened_segments", 0))
+        contour_curve_fitted_segments += int(stats.get("curve_fitted_segments", 0))
+        contour_rejected_cleanup_count += int(stats.get("rejected_cleanup_count", 0))
+        effective_upsample_factors.append(int(stats.get("effective_upsample_factor", 1)))
+
+    metadata = {
         "height_mm": round(float(height_mm), 4),
         "scale_x_mm_per_pixel": round(float(scale_x), 6),
         "scale_y_mm_per_pixel": round(float(scale_y), 6),
@@ -952,10 +1003,191 @@ def _vector_mesh_from_height_map(
         "mesh_generation_warning": "",
         "vector_contour_count": contour_count,
         "vector_polygon_count": polygon_count,
+        "vector_geometry_method": (
+            "mixed_contour_and_rectangle_runs"
+            if contour_geometry_fallback_count
+            else "quality_contours"
+        ),
+        "vector_contour_upsample_factor": int(config.contour_upsample_factor),
+        "vector_contour_effective_upsample_factors": sorted(set(effective_upsample_factors)),
+        "vector_contour_fallback_count": contour_geometry_fallback_count,
+        "vector_contour_straightened_segments": contour_straightened_segments,
+        "vector_contour_curve_fitted_segments": contour_curve_fitted_segments,
+        "vector_contour_rejected_cleanup_count": contour_rejected_cleanup_count,
     }
+    return height_mm, scale_x, scale_y, levels, cumulative_geometries, metadata
+
+
+def _stacked_shell_vector_mesh_from_height_map(
+    height_map: np.ndarray,
+    width_mm: float,
+    config: FilamentSwapReliefConfig,
+    *,
+    repair_reason: str,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+    _height_mm, scale_x, _scale_y, levels, cumulative_geometries, metadata = _vector_level_geometries(
+        height_map,
+        width_mm,
+        config,
+    )
+    meshes: list[trimesh.Trimesh] = []
+    polygon_repair_count = 0
+    overlap = min(FILAMENT_VECTOR_SHELL_OVERLAP_MM, max(0.0, float(config.layer_height_mm) * 0.1))
+    for index, level in enumerate(levels):
+        lower_level = 0.0 if index == 0 else levels[index - 1]
+        shell_low = 0.0 if index == 0 else max(0.0, lower_level - overlap)
+        shell_height = level - shell_low
+        if shell_height <= 0:
+            continue
+        for polygon in _geometry_polygons(cumulative_geometries[index]):
+            shell_meshes, repair_used = _extrude_repaired_shell_polygon(polygon, shell_height, scale_x)
+            if repair_used:
+                polygon_repair_count += 1
+            for shell_mesh in shell_meshes:
+                shell_mesh.apply_translation((0.0, 0.0, shell_low))
+                meshes.append(shell_mesh)
+    if not meshes:
+        raise ValueError("Stacked-shell vector repair did not create any meshes.")
+    mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+    mesh.fix_normals()
+    metadata.update(
+        {
+            "mesh_generation_mode": "vector_contours",
+            "mesh_generation_warning": (
+                f"{repair_reason} Used stacked-shell vector repair with "
+                f"{overlap:.4f} mm internal overlap instead of pixel fallback."
+            ),
+            "vector_assembly_mode": "stacked_shell_overlap",
+            "vector_shell_overlap_mm": round(float(overlap), 4),
+            "vector_polygon_repair_count": polygon_repair_count,
+        }
+    )
+    return mesh, metadata
+
+
+def _extrude_repaired_shell_polygon(polygon, height: float, scale_mm_per_pixel: float) -> tuple[list[trimesh.Trimesh], bool]:
+    last_error: Exception | None = None
+    for factor in FILAMENT_VECTOR_POLYGON_REPAIR_FACTORS:
+        try:
+            if factor > 0:
+                epsilon = max(float(scale_mm_per_pixel) * factor, 1e-5)
+                candidates = _geometry_polygons(_clean_geometry(polygon.buffer(epsilon, join_style=1).buffer(-epsilon, join_style=1)))
+            else:
+                candidates = [polygon]
+            meshes = [trimesh.creation.extrude_polygon(candidate, height=height) for candidate in candidates]
+            if meshes and all(_mesh_is_safe(mesh) for mesh in meshes):
+                return meshes, factor > 0
+        except Exception as error:
+            last_error = error
+    if last_error is not None:
+        raise ValueError(f"Could not extrude repaired filament polygon: {last_error}") from last_error
+    raise ValueError("Could not extrude repaired filament polygon without non-manifold edges.")
 
 
 def _mask_to_geometry(
+    mask: np.ndarray,
+    scale_x: float,
+    scale_y: float,
+    depth_mm: float,
+    config: FilamentSwapReliefConfig,
+):
+    try:
+        return _mask_to_quality_contour_geometry(mask, scale_x, scale_y, depth_mm, config)
+    except Exception:
+        geometry, stats = _mask_to_rectangle_run_geometry(mask, scale_x, scale_y, depth_mm, config)
+        stats["contour_geometry_fallback_count"] = 1
+        return geometry, stats
+
+
+def _mask_to_quality_contour_geometry(
+    mask: np.ndarray,
+    scale_x: float,
+    scale_y: float,
+    depth_mm: float,
+    config: FilamentSwapReliefConfig,
+):
+    from shapely.geometry import Polygon, box
+    from shapely.ops import unary_union
+
+    contour_scale = _effective_contour_upsample_factor(mask, config)
+    contour_mask = _upsample_binary_mask(mask, contour_scale)
+    contour_scale_x = float(scale_x) / contour_scale
+    contour_scale_y = float(scale_y) / contour_scale
+    contours, report = extract_vector_contours(
+        contour_mask,
+        min_area=1.0,
+        simplify_tolerance=float(config.contour_simplify_tolerance_px) * contour_scale,
+        smoothing_enabled=bool(config.contour_smoothing_enabled),
+        smoothing_strength=int(config.contour_smoothing_strength),
+        collinear_merge_tolerance=2.0,
+        sharp_corner_angle_threshold=35.0,
+        safe_smoothing_enabled=True,
+        smoothing_profile="balanced",
+        max_area_change_percent=12.0,
+        max_bbox_change_percent=8.0,
+        max_aspect_ratio_change_percent=8.0,
+        max_point_reduction_percent=88.0,
+        straight_line_cleanup_enabled=True,
+        straight_line_tolerance=4.0 * contour_scale,
+        min_straight_segment_length_px=24.0 * contour_scale,
+        curve_fit_enabled=True,
+        curve_fit_tolerance=1.0 * contour_scale,
+        min_curve_segment_length_px=12.0 * contour_scale,
+        max_curve_error_percent=5.0,
+    )
+
+    exterior_polygons = []
+    hole_polygons = []
+    for contour in contours:
+        ring = _contour_points_to_mm_ring(
+            contour.points,
+            contour_scale_x,
+            contour_scale_y,
+            depth_mm,
+            sample_offset_px=0.5,
+        )
+        if len(ring) < 3:
+            continue
+        polygon = Polygon(ring)
+        polygon = _clean_geometry(polygon)
+        parts = _geometry_polygons(polygon)
+        if contour.is_hole:
+            hole_polygons.extend(parts)
+        else:
+            exterior_polygons.extend(parts)
+
+    if not exterior_polygons:
+        raise ValueError("Filament contour geometry did not find valid exterior polygons.")
+
+    hole_assignments = _assign_holes_to_exteriors(exterior_polygons, hole_polygons)
+    polygons = []
+    for index, exterior in enumerate(exterior_polygons):
+        holes = [list(hole.exterior.coords) for hole in hole_assignments[index]]
+        polygon = Polygon(list(exterior.exterior.coords), holes)
+        polygons.extend(_geometry_polygons(_clean_geometry(polygon)))
+
+    if not polygons:
+        raise ValueError("Filament contour geometry did not find valid polygons.")
+
+    half_pixel_mm = min(contour_scale_x, contour_scale_y) * 0.5
+    geometry = _clean_geometry(unary_union(polygons))
+    if half_pixel_mm > 0:
+        geometry = _clean_geometry(geometry.buffer(half_pixel_mm, join_style=1))
+    bounds_clip = box(0.0, 0.0, float(scale_x) * mask.shape[1], depth_mm)
+    geometry = _clean_geometry(geometry.intersection(bounds_clip))
+    if geometry.is_empty:
+        raise ValueError("Filament contour geometry became empty after clipping.")
+    return geometry, {
+        "contours": report.original_contour_count,
+        "contour_geometry_fallback_count": 0,
+        "effective_upsample_factor": contour_scale,
+        "straightened_segments": report.straightened_segments,
+        "curve_fitted_segments": report.curve_fitted_segments,
+        "rejected_cleanup_count": report.rejected_cleanup_count,
+    }
+
+
+def _mask_to_rectangle_run_geometry(
     mask: np.ndarray,
     scale_x: float,
     scale_y: float,
@@ -984,7 +1216,27 @@ def _mask_to_geometry(
     if tolerance_px > 0:
         tolerance_mm = tolerance_px * min(float(scale_x), float(scale_y))
         geometry = _clean_geometry(geometry.simplify(tolerance_mm, preserve_topology=True))
-    return geometry, {"contours": len(contours)}
+    return geometry, {"contours": len(contours), "contour_geometry_fallback_count": 0, "effective_upsample_factor": 1}
+
+
+def _effective_contour_upsample_factor(mask: np.ndarray, config: FilamentSwapReliefConfig) -> int:
+    requested = max(1, int(config.contour_upsample_factor))
+    while requested > 1 and int(mask.size) * requested * requested > MAX_FILAMENT_CONTOUR_PIXELS:
+        requested -= 1
+    return requested
+
+
+def _upsample_binary_mask(mask: np.ndarray, scale: int) -> np.ndarray:
+    scale = max(1, int(scale))
+    if scale == 1:
+        return mask.astype(bool)
+    height, width = mask.shape
+    resized = cv2.resize(
+        mask.astype(np.uint8) * 255,
+        (width * scale, height * scale),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    return resized >= 127
 
 
 def _smooth_filament_geometry(geometry, scale_x: float, scale_y: float, config: FilamentSwapReliefConfig):
@@ -1086,11 +1338,16 @@ def _contour_points_to_mm_ring(
     scale_x: float,
     scale_y: float,
     depth_mm: float,
+    *,
+    sample_offset_px: float = 0.0,
 ) -> list[tuple[float, float]]:
     ring: list[tuple[float, float]] = []
     previous: tuple[float, float] | None = None
     for point in points:
-        current = (float(point[0]) * scale_x, depth_mm - (float(point[1]) * scale_y))
+        current = (
+            (float(point[0]) + sample_offset_px) * scale_x,
+            depth_mm - ((float(point[1]) + sample_offset_px) * scale_y),
+        )
         if current != previous:
             ring.append(current)
             previous = current
