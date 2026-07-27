@@ -45,8 +45,11 @@ def create_filament_swap_relief_stl(
     color_plan_path: Path | None = None,
     filament_swap_plan_path: Path | None = None,
     generic_3mf_path: Path | None = None,
+    printability_preview_path: Path | None = None,
 ) -> tuple[StlCreationResult, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if printability_preview_path is not None:
+        printability_preview_path.unlink(missing_ok=True)
     rgb, alpha, load_metadata = _load_sampled_rgba(image_path, config.max_sampled_pixels)
     if config.smooth_edges and config.edge_smoothing_px > 0:
         kernel = max(3, int(config.edge_smoothing_px) * 2 + 1)
@@ -105,6 +108,7 @@ def create_filament_swap_relief_stl(
         config=config.printability,
         product_mode="filament_swap_relief",
         generation_path="filament_swap_heightfield",
+        visual_warning_preview_path=printability_preview_path,
     )
     warnings.extend(printability_report.get("unresolved_printability_warnings") or [])
     height_map, topology_repair_pixels = _resolve_height_level_diagonal_contacts(height_map)
@@ -209,6 +213,7 @@ def create_filament_swap_relief_stl(
         "removed_pixel_count": island_result.summary["pixels_removed"],
         "preserved_region_count": island_result.summary["intentionally_preserved_components"],
         "printability_report": printability_report,
+        "printability_visual_warning_preview_path": printability_report.get("visual_warning_preview_path", ""),
         "warnings": warnings,
     }
     metadata.update(load_metadata)

@@ -975,7 +975,9 @@ class MainWindow(QMainWindow):
         review_title = QLabel("Stage Compare")
         review_title.setObjectName("sectionTitle")
         layout.addWidget(review_title)
-        self.review_stage = self._combo(["original", "cleaned", "body", "holes", "details", "vector", "review SVG", "STL"])
+        self.review_stage = self._combo(
+            ["original", "cleaned", "body", "holes", "details", "print-safe", "vector", "review SVG", "STL"]
+        )
         self.review_stage.currentTextChanged.connect(self.refresh_review)
         self.review_warning = QLabel("")
         self.review_warning.setWordWrap(True)
@@ -2462,6 +2464,11 @@ class MainWindow(QMainWindow):
 
         artifact_summary = status.get("artifact_summary") or {}
         warning_count = len(status.get("warnings") or [])
+        printability_preview_raw = str(status.get("printability_preview_path") or "")
+        if printability_preview_raw:
+            printability_preview_path = Path(printability_preview_raw)
+            if printability_preview_path.exists():
+                self._append_status_path("Print-safe cleanup preview", printability_preview_path)
         isolated_count = int(artifact_summary.get("isolated_island_count") or 0)
         removed_count = int(artifact_summary.get("removed_island_count") or 0)
         preserved_count = int(artifact_summary.get("preserved_island_count") or 0)
@@ -2511,6 +2518,7 @@ class MainWindow(QMainWindow):
             "body": self._preview_output_path(f"{self.current_stem}_preview_body_mask.png"),
             "holes": self._preview_output_path(f"{self.current_stem}_preview_hole_mask.png"),
             "details": self._preview_output_path(f"{self.current_stem}_preview_detail_mask.png"),
+            "print-safe": self._preview_output_path(f"{self.current_stem}_print_safe_cleanup.png"),
             "vector": self._preview_output_path(f"{self.current_stem}_preview_svg.png"),
             "review SVG": self._preview_output_path(f"{self.current_stem}_preview_svg.png"),
             "STL": self._preview_output_path(f"{self.current_stem}_preview_stl.png"),

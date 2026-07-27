@@ -64,13 +64,21 @@ def create_relief_stl(
     config: StlConfig,
     *,
     generic_3mf_path: Path | None = None,
+    printability_preview_path: Path | None = None,
 ) -> StlCreationResult:
     """Create a simple raised relief STL from a binary silhouette mask."""
     if config.product_mode == "lithophane":
         raise ValueError("Lithophane uses create_lithophane_stl instead of the relief STL pipeline.")
+    if printability_preview_path is not None:
+        printability_preview_path.unlink(missing_ok=True)
     if config.stl_backend in {"auto_vector_first", "vector_extrusion"}:
         try:
-            mesh, printability_report = _create_vector_extrusion_stl(analysis, output_path, config)
+            mesh, printability_report = _create_vector_extrusion_stl(
+                analysis,
+                output_path,
+                config,
+                printability_preview_path=printability_preview_path,
+            )
             vector_report = validate_stl_mesh(output_path)
             if not _mesh_report_is_safe_for_vector_backend(vector_report):
                 raise RuntimeError(
@@ -94,7 +102,12 @@ def create_relief_stl(
                 printability_report=printability_report,
             )
         except (ImportError, RuntimeError, ValueError, AttributeError) as error:
-            mesh, printability_report = _create_raster_heightfield_stl(analysis, output_path, config)
+            mesh, printability_report = _create_raster_heightfield_stl(
+                analysis,
+                output_path,
+                config,
+                printability_preview_path=printability_preview_path,
+            )
             generic_metadata = export_generic_3mf_for_stl_mesh(
                 mesh,
                 generic_3mf_path,
@@ -113,7 +126,12 @@ def create_relief_stl(
     if config.stl_backend != "raster_heightfield":
         raise ValueError(f"Unsupported stl_backend: {config.stl_backend}")
 
-    mesh, printability_report = _create_raster_heightfield_stl(analysis, output_path, config)
+    mesh, printability_report = _create_raster_heightfield_stl(
+        analysis,
+        output_path,
+        config,
+        printability_preview_path=printability_preview_path,
+    )
     generic_metadata = export_generic_3mf_for_stl_mesh(
         mesh,
         generic_3mf_path,
@@ -301,6 +319,8 @@ def _create_raster_heightfield_stl(
     analysis: ImageAnalysis | np.ndarray,
     output_path: Path,
     config: StlConfig,
+    *,
+    printability_preview_path: Path | None = None,
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     mask = _mask_for_stl(analysis, config)
@@ -318,6 +338,7 @@ def _create_raster_heightfield_stl(
         product_mode=config.product_mode,
         generation_path="raster_heightfield",
         preset=getattr(config.printability, "cleanup_preset", ""),
+        visual_warning_preview_path=printability_preview_path,
     )
     if detail_mask is not None:
         detail_mask = detail_mask & resized_mask
@@ -381,6 +402,8 @@ def _create_vector_extrusion_stl(
     analysis: ImageAnalysis | np.ndarray,
     output_path: Path,
     config: StlConfig,
+    *,
+    printability_preview_path: Path | None = None,
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not isinstance(analysis, ImageAnalysis) or not analysis.vector_contours:
@@ -445,6 +468,7 @@ def _create_vector_extrusion_stl(
         config=config.printability,
         product_mode=config.product_mode,
         generation_path="vector_extrusion",
+        visual_warning_preview_path=printability_preview_path,
     )
     if not merged_polygons:
         raise ValueError("Minimum printable geometry cleanup removed every vector component.")

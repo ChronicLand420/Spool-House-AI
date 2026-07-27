@@ -202,6 +202,7 @@ class ImagePipeline:
                     color_plan_path=paths.color_plan_path,
                     filament_swap_plan_path=paths.filament_swap_plan_path,
                     generic_3mf_path=paths.generic_3mf_path,
+                    printability_preview_path=paths.printability_preview_path,
                 )
                 for warning in filament_swap_metadata.get("warnings") or []:
                     if warning not in warnings:
@@ -362,7 +363,13 @@ class ImagePipeline:
         stl_created = False
         try:
             _emit(stage_callback, "Mesh Forge", "active", "Generating printable mesh", svg_path)
-            stl_result = create_relief_stl(analysis, stl_path, self.config.stl, generic_3mf_path=paths.generic_3mf_path)
+            stl_result = create_relief_stl(
+                analysis,
+                stl_path,
+                self.config.stl,
+                generic_3mf_path=paths.generic_3mf_path,
+                printability_preview_path=paths.printability_preview_path,
+            )
             _append_generic_3mf_warnings(warnings, stl_result.generic_3mf_metadata)
             _append_printability_warnings(warnings, stl_result.printability_report)
             self.logger.info("STL backend requested: %s", stl_result.requested_backend)
@@ -618,6 +625,11 @@ def _write_job_status(
         "hole_mask_path": str(paths.hole_mask_path),
         "detail_mask_path": str(paths.detail_mask_path),
         "contour_debug_path": str(paths.contour_debug_path),
+        "printability_preview_path": (
+            printability_summary.get("visual_warning_preview_path", "")
+            if printability_summary.get("visual_warning_preview_created")
+            else ""
+        ),
         "preview_path": str(paths.preview_path),
         "svg_path": str(paths.svg_path) if svg_applicable else "",
         "review_svg_path": str(paths.review_svg_path) if svg_applicable else "",
@@ -761,6 +773,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- STL: `{status.get('stl_path', '')}`",
         f"- Generic 3MF: `{status.get('generic_3mf_path', '')}`",
         f"- Preview: `{status.get('preview_path', '')}`",
+        f"- Print-safe cleanup preview: `{status.get('printability_preview_path', '')}`",
         f"- Mesh report: `{status.get('mesh_report_path', '')}`",
         f"- Job status: `{status.get('job_status_path', '')}`",
         f"- Job summary: `{status.get('job_summary_path', '')}`",
@@ -810,6 +823,8 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Removed or filled tiny holes: `{printability.get('removed_or_filled_tiny_holes', 0)}`",
         f"- Smallest retained feature width mm: `{printability.get('smallest_retained_feature_width_mm', '')}`",
         f"- Smallest retained component area mm2: `{printability.get('smallest_retained_component_area_mm2', '')}`",
+        f"- Visual warning preview: `{printability.get('visual_warning_preview_path', '')}`",
+        f"- Preview legend: `{printability.get('visual_warning_preview_legend', {})}`",
         "",
     ]
     if lithophane:

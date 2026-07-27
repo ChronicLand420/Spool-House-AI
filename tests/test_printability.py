@@ -17,6 +17,7 @@ from spool_house_ai.processing.printability import (
     enforce_printable_height_map,
     enforce_printable_mask,
     enforce_printable_polygons,
+    save_mask_change_preview,
     validate_lithophane_printability,
 )
 from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh
@@ -154,6 +155,41 @@ class PrintabilityTests(unittest.TestCase):
         self.assertGreater(report["pixels_added"], 0)
         self.assertEqual(report["removed_short_segments"], 0)
 
+    def test_mask_printability_writes_visual_warning_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            preview_path = temp_path / "print_safe_cleanup.png"
+            mask = np.zeros((20, 80), dtype=bool)
+            mask[9:11, 10:70] = True
+
+            cleaned, report = enforce_printable_mask(
+                mask,
+                scale_x_mm=0.2,
+                scale_y_mm=0.2,
+                config=self.printability,
+                product_mode="wall_art",
+                generation_path="test",
+                visual_warning_preview_path=preview_path,
+            )
+
+            self.assertTrue(np.any(cleaned))
+            self.assertTrue(preview_path.exists())
+            self.assertGreater(preview_path.stat().st_size, 0)
+            self.assertTrue(report["visual_warning_preview_created"])
+            self.assertEqual(report["visual_warning_preview_path"], str(preview_path))
+
+    def test_unchanged_visual_warning_preview_is_not_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            preview_path = temp_path / "unchanged.png"
+            mask = np.zeros((20, 20), dtype=bool)
+            mask[5:15, 5:15] = True
+
+            created = save_mask_change_preview(mask, mask.copy(), preview_path)
+
+            self.assertFalse(created)
+            self.assertFalse(preview_path.exists())
+
     def test_short_fragment_is_removed(self) -> None:
         mask = np.zeros((20, 20), dtype=bool)
         mask[8:11, 8:14] = True
@@ -229,6 +265,28 @@ class PrintabilityTests(unittest.TestCase):
         self.assertTrue(np.all(cleaned > 0))
         self.assertGreaterEqual(report["removed_partial_color_fragments"], 1)
 
+    def test_height_map_printability_writes_visual_warning_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            preview_path = temp_path / "height_print_safe_cleanup.png"
+            height_map = np.full((24, 24), 0.8, dtype=np.float32)
+            height_map[10, 10] = 1.2
+
+            cleaned, report = enforce_printable_height_map(
+                height_map,
+                width_mm=24.0,
+                config=self.printability,
+                product_mode="filament_swap_relief",
+                generation_path="filament_swap_heightfield",
+                visual_warning_preview_path=preview_path,
+            )
+
+            self.assertFalse(np.any(np.isclose(cleaned, 1.2)))
+            self.assertTrue(preview_path.exists())
+            self.assertGreater(preview_path.stat().st_size, 0)
+            self.assertTrue(report["visual_warning_preview_created"])
+            self.assertEqual(report["visual_warning_preview_path"], str(preview_path))
+
     def test_lithophane_uses_framework_without_vector_fragment_cleanup(self) -> None:
         import trimesh
 
@@ -271,6 +329,7 @@ class PrintabilityTests(unittest.TestCase):
             paths = build_job_output_paths(output_dir, input_path)
             status = json.loads(paths.job_status_path.read_text(encoding="utf-8"))
             self.assertIn("printability_summary", status)
+            self.assertIn("printability_preview_path", status)
             self.assertTrue(status["printability_summary"]["validator_invoked"])
             self.assertTrue(status["printability_summary"]["enforcement_enabled"])
             summary = paths.job_summary_path.read_text(encoding="utf-8")

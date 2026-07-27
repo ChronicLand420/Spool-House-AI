@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Iterable
 
 import cv2
 import numpy as np
 import trimesh
+from PIL import Image, ImageDraw
 
 
 PRINTABILITY_REPORT_VERSION = "1.0"
@@ -44,6 +46,15 @@ def empty_printability_report(
         "unresolved_printability_warnings": [],
         "paths_invoked": [generation_path],
         "component_records": [],
+        "visual_warning_preview_created": False,
+        "visual_warning_preview_path": "",
+        "visual_warning_preview_paths": [],
+        "visual_warning_preview_legend": {
+            "gray": "retained printable geometry",
+            "red": "removed fragments or holes",
+            "cyan": "added, thickened, closed, or reinforced geometry",
+            "yellow": "changed height or reassigned color region",
+        },
     }
 
 
@@ -102,7 +113,16 @@ def combine_printability_reports(
                 combined[key] += int(value or 0)
         combined["unresolved_printability_warnings"].extend(report.get("unresolved_printability_warnings") or [])
         combined["component_records"].extend(report.get("component_records") or [])
+        preview_paths = report.get("visual_warning_preview_paths") or []
+        if report.get("visual_warning_preview_path"):
+            preview_paths = [report["visual_warning_preview_path"], *preview_paths]
+        for preview_path in preview_paths:
+            if preview_path and preview_path not in combined["visual_warning_preview_paths"]:
+                combined["visual_warning_preview_paths"].append(preview_path)
     combined["unresolved_printability_warnings"] = list(dict.fromkeys(combined["unresolved_printability_warnings"]))
+    if combined["visual_warning_preview_paths"]:
+        combined["visual_warning_preview_created"] = True
+        combined["visual_warning_preview_path"] = combined["visual_warning_preview_paths"][0]
     return combined
 
 
@@ -116,6 +136,7 @@ def enforce_printable_mask(
     generation_path: str,
     preset: str = "",
     color_label: str = "",
+    visual_warning_preview_path: Path | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     report = empty_printability_report(
         config,
@@ -128,6 +149,11 @@ def enforce_printable_mask(
     working = np.asarray(mask, dtype=bool).copy()
     if not bool(getattr(config, "enforce_minimum_printable_geometry", True)):
         _record_mask_retained_metrics(working, report, scale_x_mm, scale_y_mm)
+        _record_visual_warning_preview(
+            report,
+            visual_warning_preview_path,
+            False,
+        )
         return working, report
 
     before = working.copy()
@@ -143,6 +169,11 @@ def enforce_printable_mask(
     report["pixels_removed"] += removed
     _record_mask_retained_metrics(working, report, scale_x_mm, scale_y_mm)
     _add_mask_warnings(working, report, scale_x_mm, scale_y_mm, config)
+    _record_visual_warning_preview(
+        report,
+        visual_warning_preview_path,
+        save_mask_change_preview(before, working, visual_warning_preview_path),
+    )
     return working, report
 
 
@@ -154,6 +185,7 @@ def enforce_printable_height_map(
     product_mode: str,
     generation_path: str,
     preset: str = "",
+    visual_warning_preview_path: Path | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     working = np.asarray(height_map, dtype=np.float32).copy()
     if working.ndim != 2:
@@ -192,6 +224,11 @@ def enforce_printable_height_map(
     )
     combined["height_levels_checked"] = len(levels)
     combined["pixels_recolored"] = int(np.count_nonzero(~np.isclose(original, working, atol=1e-5)))
+    _record_visual_warning_preview(
+        combined,
+        visual_warning_preview_path,
+        save_height_map_change_preview(original, working, visual_warning_preview_path),
+    )
     return working, combined
 
 
@@ -202,6 +239,7 @@ def enforce_printable_polygons(
     product_mode: str,
     generation_path: str,
     preset: str = "",
+    visual_warning_preview_path: Path | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     report = empty_printability_report(
         config,
@@ -211,6 +249,7 @@ def enforce_printable_polygons(
     )
     if not bool(getattr(config, "enforce_minimum_printable_geometry", True)):
         _record_polygon_metrics(polygons, report)
+        _record_visual_warning_preview(report, visual_warning_preview_path, False)
         return polygons, report
 
     try:
@@ -224,7 +263,9 @@ def enforce_printable_polygons(
 
     valid = [polygon for polygon in polygons if not polygon.is_empty and polygon.area > 0]
     if not valid:
+        _record_visual_warning_preview(report, visual_warning_preview_path, False)
         return [], report
+    before_polygons = list(valid)
 
     valid = [_drop_tiny_holes_from_polygon(polygon, config, report) for polygon in valid]
     valid = [polygon for polygon in valid if not polygon.is_empty and polygon.area > 0]
@@ -301,7 +342,87 @@ def enforce_printable_polygons(
         cleaned = _polygon_parts(merged)
     _record_polygon_metrics(cleaned, report)
     _add_polygon_warnings(cleaned, report, config)
+    _record_visual_warning_preview(
+        report,
+        visual_warning_preview_path,
+        save_polygon_change_preview(before_polygons, cleaned, visual_warning_preview_path),
+    )
     return cleaned, report
+
+
+def save_mask_change_preview(
+    before_mask: np.ndarray,
+    after_mask: np.ndarray,
+    output_path: Path | None,
+) -> bool:
+    if output_path is None:
+        return False
+    before = np.asarray(before_mask, dtype=bool)
+    after = np.asarray(after_mask, dtype=bool)
+    if before.shape != after.shape:
+        raise ValueError("Printability preview masks must have matching shapes.")
+    if np.array_equal(before, after):
+        output_path.unlink(missing_ok=True)
+        return False
+    image = _change_preview_image(before, after)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path)
+    return True
+
+
+def save_height_map_change_preview(
+    before_height_map: np.ndarray,
+    after_height_map: np.ndarray,
+    output_path: Path | None,
+) -> bool:
+    if output_path is None:
+        return False
+    before = np.asarray(before_height_map, dtype=np.float32)
+    after = np.asarray(after_height_map, dtype=np.float32)
+    if before.shape != after.shape:
+        raise ValueError("Printability preview height maps must have matching shapes.")
+    if np.allclose(before, after, atol=1e-5):
+        output_path.unlink(missing_ok=True)
+        return False
+    before_active = before > 0
+    after_active = after > 0
+    image = _change_preview_image(
+        before_active,
+        after_active,
+        changed_mask=before_active & after_active & ~np.isclose(before, after, atol=1e-5),
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path)
+    return True
+
+
+def save_polygon_change_preview(
+    before_polygons: list[Any],
+    after_polygons: list[Any],
+    output_path: Path | None,
+) -> bool:
+    if output_path is None:
+        return False
+    try:
+        from shapely.ops import unary_union
+    except ImportError:
+        return False
+    before_valid = [polygon for polygon in before_polygons if not polygon.is_empty and polygon.area > 0]
+    after_valid = [polygon for polygon in after_polygons if not polygon.is_empty and polygon.area > 0]
+    if not before_valid and not after_valid:
+        output_path.unlink(missing_ok=True)
+        return False
+    before_geometry = unary_union(before_valid) if before_valid else None
+    after_geometry = unary_union(after_valid) if after_valid else None
+    if before_geometry is not None and after_geometry is not None:
+        if before_geometry.symmetric_difference(after_geometry).area <= 1e-6:
+            output_path.unlink(missing_ok=True)
+            return False
+    before_mask, after_mask = _polygon_change_masks(before_valid, after_valid)
+    image = _change_preview_image(before_mask, after_mask)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path)
+    return True
 
 
 def validate_lithophane_printability(
@@ -562,3 +683,101 @@ def _merge_counts(report: dict[str, Any], source: dict[str, Any]) -> None:
             report.setdefault("component_records", []).extend(value)
         elif isinstance(value, int):
             report[key] = int(report.get(key, 0)) + value
+
+
+def _record_visual_warning_preview(
+    report: dict[str, Any],
+    output_path: Path | None,
+    created: bool,
+) -> None:
+    if created and output_path is not None:
+        report["visual_warning_preview_created"] = True
+        report["visual_warning_preview_path"] = str(output_path)
+        report["visual_warning_preview_paths"] = [str(output_path)]
+    else:
+        report["visual_warning_preview_created"] = False
+        report["visual_warning_preview_path"] = ""
+        report["visual_warning_preview_paths"] = []
+
+
+def _change_preview_image(
+    before_mask: np.ndarray,
+    after_mask: np.ndarray,
+    *,
+    changed_mask: np.ndarray | None = None,
+) -> Image.Image:
+    before = np.asarray(before_mask, dtype=bool)
+    after = np.asarray(after_mask, dtype=bool)
+    rgb = np.zeros((*before.shape, 3), dtype=np.uint8)
+    rgb[:, :] = (34, 36, 40)
+    kept = before & after
+    removed = before & ~after
+    added = ~before & after
+    rgb[kept] = (180, 184, 190)
+    rgb[removed] = (232, 80, 72)
+    rgb[added] = (70, 190, 230)
+    if changed_mask is not None:
+        rgb[np.asarray(changed_mask, dtype=bool)] = (245, 196, 74)
+    image = Image.fromarray(rgb, mode="RGB")
+    return _scale_preview_image(image)
+
+
+def _scale_preview_image(image: Image.Image) -> Image.Image:
+    width, height = image.size
+    longest = max(width, height)
+    if longest <= 0:
+        return image
+    if longest < 640:
+        factor = int(np.ceil(640 / longest))
+        return image.resize((width * factor, height * factor), Image.Resampling.NEAREST)
+    if longest > 1400:
+        scale = 1400 / float(longest)
+        return image.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.NEAREST)
+    return image
+
+
+def _polygon_change_masks(before_polygons: list[Any], after_polygons: list[Any]) -> tuple[np.ndarray, np.ndarray]:
+    all_polygons = [*before_polygons, *after_polygons]
+    min_x = min(float(polygon.bounds[0]) for polygon in all_polygons)
+    min_y = min(float(polygon.bounds[1]) for polygon in all_polygons)
+    max_x = max(float(polygon.bounds[2]) for polygon in all_polygons)
+    max_y = max(float(polygon.bounds[3]) for polygon in all_polygons)
+    width_mm = max(max_x - min_x, 1e-6)
+    height_mm = max(max_y - min_y, 1e-6)
+    longest = max(width_mm, height_mm)
+    scale = min(12.0, 1200.0 / longest)
+    padding = 8
+    image_width = max(32, int(np.ceil(width_mm * scale)) + padding * 2)
+    image_height = max(32, int(np.ceil(height_mm * scale)) + padding * 2)
+    before_mask = _render_polygon_mask(before_polygons, min_x, min_y, max_y, scale, image_width, image_height, padding)
+    after_mask = _render_polygon_mask(after_polygons, min_x, min_y, max_y, scale, image_width, image_height, padding)
+    return before_mask, after_mask
+
+
+def _render_polygon_mask(
+    polygons: list[Any],
+    min_x: float,
+    min_y: float,
+    max_y: float,
+    scale: float,
+    image_width: int,
+    image_height: int,
+    padding: int,
+) -> np.ndarray:
+    image = Image.new("L", (image_width, image_height), 0)
+    draw = ImageDraw.Draw(image)
+
+    def map_point(point: tuple[float, float]) -> tuple[int, int]:
+        x = padding + int(round((float(point[0]) - min_x) * scale))
+        y = padding + int(round((max_y - float(point[1])) * scale))
+        return x, y
+
+    for polygon in polygons:
+        exterior = [map_point(point) for point in polygon.exterior.coords]
+        if len(exterior) >= 3:
+            draw.polygon(exterior, fill=255)
+        for interior in polygon.interiors:
+            hole = [map_point(point) for point in interior.coords]
+            if len(hole) >= 3:
+                draw.polygon(hole, fill=0)
+    return np.asarray(image, dtype=np.uint8) > 127

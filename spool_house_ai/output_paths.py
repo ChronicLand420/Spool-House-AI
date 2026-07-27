@@ -21,6 +21,7 @@ class JobOutputPaths:
     hole_mask_path: Path
     detail_mask_path: Path
     contour_debug_path: Path
+    printability_preview_path: Path
     settings_path: Path
     svg_path: Path
     review_svg_path: Path
@@ -81,6 +82,7 @@ def build_job_output_paths_for_stem(output_root: Path, stem: str, source_filenam
         hole_mask_path=previews_dir / f"{stem}_hole_mask.png",
         detail_mask_path=previews_dir / f"{stem}_detail_mask.png",
         contour_debug_path=previews_dir / f"{stem}_contour_debug.png",
+        printability_preview_path=previews_dir / f"{stem}_print_safe_cleanup.png",
         settings_path=reports_dir / "job_settings.yaml",
         svg_path=svg_dir / f"{stem}.svg",
         review_svg_path=svg_dir / f"{stem}_review.svg",
