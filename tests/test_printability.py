@@ -273,7 +273,9 @@ class PrintabilityTests(unittest.TestCase):
             self.assertIn("printability_summary", status)
             self.assertTrue(status["printability_summary"]["validator_invoked"])
             self.assertTrue(status["printability_summary"]["enforcement_enabled"])
-            self.assertIn("Minimum Printable Geometry", paths.job_summary_path.read_text(encoding="utf-8"))
+            summary = paths.job_summary_path.read_text(encoding="utf-8")
+            self.assertIn("Print-Safe Cleanup", summary)
+            self.assertIn("Minimum detail width mm", summary)
 
     def test_every_visible_cleanup_preset_invokes_printability_in_relief_pipeline(self) -> None:
         presets = [

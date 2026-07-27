@@ -1216,14 +1216,14 @@ class MainWindow(QMainWindow):
         self.printer_line_width = self._double_spin(0.1, 3.0, self.config.printer_profile.line_width_mm)
         self.printer_layer_height = self._double_spin(0.04, 1.0, self.config.printer_profile.layer_height_mm)
         self.printer_first_layer_height = self._double_spin(0.04, 1.0, self.config.printer_profile.first_layer_height_mm)
-        self.printability_printer_aware_defaults = QCheckBox("Use printer/nozzle-aware defaults")
+        self.printability_printer_aware_defaults = QCheckBox("Use printer/nozzle defaults")
         self.printability_printer_aware_defaults.setToolTip(
-            "Derive print-safe cleanup thresholds from nozzle diameter, line width, and layer height."
+            "Set print-safe cleanup values from nozzle diameter, line width, and layer height."
         )
         self.printability_printer_aware_defaults.setChecked(self.config.printability.use_printer_aware_defaults)
-        self.printability_enabled = QCheckBox("Enforce minimum printable geometry")
+        self.printability_enabled = QCheckBox("Print-safe cleanup")
         self.printability_enabled.setToolTip(
-            "Remove or reinforce model details that are too small to print reliably at the final physical size."
+            "Remove tiny unprintable pieces and strengthen fragile details at the final model size."
         )
         self.printability_enabled.setChecked(self.config.printability.enforce_minimum_printable_geometry)
         self.printability_min_feature_width = self._double_spin(
@@ -1261,10 +1261,10 @@ class MainWindow(QMainWindow):
             5.0,
             self.config.printability.minimum_component_dimension_mm,
         )
-        self.apply_printer_defaults_button = QPushButton("Apply Printer Defaults")
+        self.apply_printer_defaults_button = QPushButton("Use Printer Defaults")
         self.apply_printer_defaults_button.setObjectName("secondaryButton")
         self.apply_printer_defaults_button.setToolTip(
-            "Fill the minimum printable geometry values from the current printer/nozzle settings."
+            "Fill the print-safe cleanup values from the current printer/nozzle settings."
         )
         self.apply_printer_defaults_button.clicked.connect(self.apply_printer_aware_defaults)
         self.printability_printer_aware_defaults.toggled.connect(self._printer_defaults_toggled)
@@ -1374,15 +1374,15 @@ class MainWindow(QMainWindow):
         advanced_section.body_layout.addWidget(printer_group)
 
         printability_group = self._form_group(
-            "Minimum Printable Geometry",
+            "Print-Safe Cleanup",
             [
-                ("Minimum feature width mm", self.printability_min_feature_width),
-                ("Minimum segment length mm", self.printability_min_segment_length),
-                ("Minimum island area mm2", self.printability_min_island_area),
-                ("Minimum connection width mm", self.printability_min_connection_width),
-                ("Maximum mergeable gap mm", self.printability_max_mergeable_gap),
-                ("Minimum hole area mm2", self.printability_min_hole_area),
-                ("Minimum component dimension mm", self.printability_min_component_dimension),
+                ("Minimum detail width mm", self.printability_min_feature_width),
+                ("Shortest usable stroke mm", self.printability_min_segment_length),
+                ("Remove pieces under mm2", self.printability_min_island_area),
+                ("Strengthen connections under mm", self.printability_min_connection_width),
+                ("Close gaps up to mm", self.printability_max_mergeable_gap),
+                ("Fill holes under mm2", self.printability_min_hole_area),
+                ("Smallest part dimension mm", self.printability_min_component_dimension),
             ],
         )
         printability_group.layout().addRow(self.printability_printer_aware_defaults)

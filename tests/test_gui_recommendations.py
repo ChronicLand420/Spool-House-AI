@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
 from spool_house_ai.gui import MainWindow
 
@@ -85,6 +85,20 @@ class GuiRecommendationTests(unittest.TestCase):
             self.assertTrue(config.filament_swap_relief.solid_base_enabled)
         finally:
             window.close()
+
+    def test_print_safe_cleanup_uses_customer_friendly_labels(self) -> None:
+        window = MainWindow()
+        try:
+            buttons = window.findChildren(QPushButton)
+            checkboxes = window.findChildren(QCheckBox)
+            visible_text = " ".join(child.text() for child in [*buttons, *checkboxes])
+            self.assertIn("Print-safe cleanup", visible_text)
+            self.assertIn("Use printer/nozzle defaults", visible_text)
+            self.assertIn("Use Printer Defaults", visible_text)
+            self.assertNotIn("Enforce minimum printable geometry", visible_text)
+        finally:
+            window.close()
+
 
     def test_printability_controls_feed_shared_config(self) -> None:
         window = MainWindow()
