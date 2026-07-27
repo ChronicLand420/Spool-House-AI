@@ -21,6 +21,8 @@ Created by ChronicLand420.
 
 Future features such as AI image generation, Blender automation, mesh repair, dashboard, queueing, database, upload packages, slicer project generation, automatic slicing, and G-code export are intentionally not implemented yet.
 
+See [`ROADMAP.md`](ROADMAP.md) for the current print-readiness priorities.
+
 ## Desktop App
 
 Launch the GUI:
