@@ -343,6 +343,7 @@ def _thresholds(config: Any) -> dict[str, Any]:
         return asdict(config)
     except TypeError:
         return {
+            "use_printer_aware_defaults": bool(getattr(config, "use_printer_aware_defaults", True)),
             "enforce_minimum_printable_geometry": bool(
                 getattr(config, "enforce_minimum_printable_geometry", True)
             ),

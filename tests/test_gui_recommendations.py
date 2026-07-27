@@ -90,7 +90,9 @@ class GuiRecommendationTests(unittest.TestCase):
         window = MainWindow()
         try:
             self.assertTrue(hasattr(window, "printability_enabled"))
+            self.assertTrue(hasattr(window, "printability_printer_aware_defaults"))
             self.assertTrue(hasattr(window, "printability_min_feature_width"))
+            window.printability_printer_aware_defaults.setChecked(False)
             window.printability_enabled.setChecked(False)
             window.printability_min_feature_width.setValue(1.2)
             window.printability_min_segment_length.setValue(2.4)
@@ -103,6 +105,7 @@ class GuiRecommendationTests(unittest.TestCase):
             config = window._config_from_controls()
 
             self.assertFalse(config.printability.enforce_minimum_printable_geometry)
+            self.assertFalse(config.printability.use_printer_aware_defaults)
             self.assertAlmostEqual(config.printability.minimum_feature_width_mm, 1.2)
             self.assertAlmostEqual(config.printability.minimum_segment_length_mm, 2.4)
             self.assertAlmostEqual(config.printability.minimum_island_area_mm2, 3.6)
@@ -112,6 +115,28 @@ class GuiRecommendationTests(unittest.TestCase):
             self.assertAlmostEqual(config.printability.minimum_component_dimension_mm, 0.9)
             self.assertEqual(config.stl.printability, config.printability)
             self.assertEqual(config.filament_swap_relief.printability, config.printability)
+        finally:
+            window.close()
+
+    def test_printer_aware_defaults_feed_printability_config(self) -> None:
+        window = MainWindow()
+        try:
+            self.assertTrue(hasattr(window, "printer_nozzle_diameter"))
+            self.assertTrue(hasattr(window, "printer_line_width"))
+            window.printability_printer_aware_defaults.setChecked(True)
+            window.printer_nozzle_diameter.setValue(0.6)
+            window.printer_line_width.setValue(0.6)
+            window.apply_printer_aware_defaults()
+
+            config = window._config_from_controls()
+
+            self.assertTrue(config.printability.use_printer_aware_defaults)
+            self.assertAlmostEqual(config.printer_profile.nozzle_diameter_mm, 0.6)
+            self.assertAlmostEqual(config.printer_profile.line_width_mm, 0.6)
+            self.assertAlmostEqual(config.printability.minimum_feature_width_mm, 1.2)
+            self.assertAlmostEqual(config.printability.minimum_segment_length_mm, 2.25)
+            self.assertAlmostEqual(config.printability.maximum_mergeable_gap_mm, 0.9)
+            self.assertFalse(window.printability_min_feature_width.isEnabled())
         finally:
             window.close()
 

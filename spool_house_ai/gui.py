@@ -58,7 +58,13 @@ from spool_house_ai.app_identity import (
     load_app_version,
     set_windows_app_user_model_id,
 )
-from spool_house_ai.config import AppConfig, apply_cleanup_preset, load_config, normalize_cleanup_preset
+from spool_house_ai.config import (
+    AppConfig,
+    apply_cleanup_preset,
+    derive_printer_aware_printability_defaults,
+    load_config,
+    normalize_cleanup_preset,
+)
 from spool_house_ai.artwork_recommendations import (
     ArtworkRecommendation,
     ArtworkRecommendationCache,
@@ -1205,6 +1211,16 @@ class MainWindow(QMainWindow):
             "Fill ignored/background pixels with the first filament height so color details sit on a solid plate."
         )
         self.filament_solid_base.setChecked(self.config.filament_swap_relief.solid_base_enabled)
+        self.printer_profile_name = QLineEdit(self.config.printer_profile.profile_name)
+        self.printer_nozzle_diameter = self._double_spin(0.1, 2.0, self.config.printer_profile.nozzle_diameter_mm)
+        self.printer_line_width = self._double_spin(0.1, 3.0, self.config.printer_profile.line_width_mm)
+        self.printer_layer_height = self._double_spin(0.04, 1.0, self.config.printer_profile.layer_height_mm)
+        self.printer_first_layer_height = self._double_spin(0.04, 1.0, self.config.printer_profile.first_layer_height_mm)
+        self.printability_printer_aware_defaults = QCheckBox("Use printer/nozzle-aware defaults")
+        self.printability_printer_aware_defaults.setToolTip(
+            "Derive print-safe cleanup thresholds from nozzle diameter, line width, and layer height."
+        )
+        self.printability_printer_aware_defaults.setChecked(self.config.printability.use_printer_aware_defaults)
         self.printability_enabled = QCheckBox("Enforce minimum printable geometry")
         self.printability_enabled.setToolTip(
             "Remove or reinforce model details that are too small to print reliably at the final physical size."
@@ -1245,6 +1261,21 @@ class MainWindow(QMainWindow):
             5.0,
             self.config.printability.minimum_component_dimension_mm,
         )
+        self.apply_printer_defaults_button = QPushButton("Apply Printer Defaults")
+        self.apply_printer_defaults_button.setObjectName("secondaryButton")
+        self.apply_printer_defaults_button.setToolTip(
+            "Fill the minimum printable geometry values from the current printer/nozzle settings."
+        )
+        self.apply_printer_defaults_button.clicked.connect(self.apply_printer_aware_defaults)
+        self.printability_printer_aware_defaults.toggled.connect(self._printer_defaults_toggled)
+        for control in [
+            self.printer_nozzle_diameter,
+            self.printer_line_width,
+            self.printer_layer_height,
+            self.printer_first_layer_height,
+        ]:
+            control.valueChanged.connect(lambda *_args: self._refresh_printer_defaults_if_enabled())
+        self._set_printability_threshold_controls_enabled(not self.printability_printer_aware_defaults.isChecked())
         for control in [
             self.filament_color_count,
             self.filament_base_height,
@@ -1330,6 +1361,18 @@ class MainWindow(QMainWindow):
         cleanup_layout.addRow(self.background_removal)
         advanced_section.body_layout.addWidget(cleanup_group)
 
+        printer_group = self._form_group(
+            "Printer / Nozzle",
+            [
+                ("Profile name", self.printer_profile_name),
+                ("Nozzle diameter mm", self.printer_nozzle_diameter),
+                ("Line width mm", self.printer_line_width),
+                ("Layer height mm", self.printer_layer_height),
+                ("First layer height mm", self.printer_first_layer_height),
+            ],
+        )
+        advanced_section.body_layout.addWidget(printer_group)
+
         printability_group = self._form_group(
             "Minimum Printable Geometry",
             [
@@ -1342,7 +1385,9 @@ class MainWindow(QMainWindow):
                 ("Minimum component dimension mm", self.printability_min_component_dimension),
             ],
         )
+        printability_group.layout().addRow(self.printability_printer_aware_defaults)
         printability_group.layout().addRow(self.printability_enabled)
+        printability_group.layout().addRow("", self.apply_printer_defaults_button)
         advanced_section.body_layout.addWidget(printability_group)
 
         keychain_group = self._form_group("Keychain", [("Hole diameter mm", self.keychain_diameter)])
@@ -1968,17 +2013,28 @@ class MainWindow(QMainWindow):
             lithophane_sharpen_strength=self.lithophane_sharpen.value(),
             lithophane_denoise_radius_px=self.lithophane_denoise.value(),
         )
-        printability = replace(
-            self.config.printability,
-            enforce_minimum_printable_geometry=self.printability_enabled.isChecked(),
-            minimum_feature_width_mm=self.printability_min_feature_width.value(),
-            minimum_segment_length_mm=self.printability_min_segment_length.value(),
-            minimum_island_area_mm2=self.printability_min_island_area.value(),
-            minimum_connection_width_mm=self.printability_min_connection_width.value(),
-            maximum_mergeable_gap_mm=self.printability_max_mergeable_gap.value(),
-            minimum_hole_area_mm2=self.printability_min_hole_area.value(),
-            minimum_component_dimension_mm=self.printability_min_component_dimension.value(),
-        )
+        printer_profile = self._printer_profile_from_controls()
+        if self.printability_printer_aware_defaults.isChecked():
+            derived_printability = derive_printer_aware_printability_defaults(printer_profile)
+            printability = replace(
+                self.config.printability,
+                use_printer_aware_defaults=True,
+                enforce_minimum_printable_geometry=self.printability_enabled.isChecked(),
+                **derived_printability,
+            )
+        else:
+            printability = replace(
+                self.config.printability,
+                use_printer_aware_defaults=False,
+                enforce_minimum_printable_geometry=self.printability_enabled.isChecked(),
+                minimum_feature_width_mm=self.printability_min_feature_width.value(),
+                minimum_segment_length_mm=self.printability_min_segment_length.value(),
+                minimum_island_area_mm2=self.printability_min_island_area.value(),
+                minimum_connection_width_mm=self.printability_min_connection_width.value(),
+                maximum_mergeable_gap_mm=self.printability_max_mergeable_gap.value(),
+                minimum_hole_area_mm2=self.printability_min_hole_area.value(),
+                minimum_component_dimension_mm=self.printability_min_component_dimension.value(),
+            )
         stl = replace(stl, printability=printability)
         filament_swap_relief = replace(
             self.config.filament_swap_relief,
@@ -2010,8 +2066,54 @@ class MainWindow(QMainWindow):
             svg=svg,
             stl=stl,
             printability=printability,
+            printer_profile=printer_profile,
             filament_swap_relief=filament_swap_relief,
         )
+
+    def _printer_profile_from_controls(self):
+        return replace(
+            self.config.printer_profile,
+            profile_name=self.printer_profile_name.text().strip() or "Custom printer",
+            printer_type="fdm",
+            nozzle_diameter_mm=self.printer_nozzle_diameter.value(),
+            line_width_mm=self.printer_line_width.value(),
+            layer_height_mm=self.printer_layer_height.value(),
+            first_layer_height_mm=self.printer_first_layer_height.value(),
+        )
+
+    def apply_printer_aware_defaults(self) -> None:
+        self._apply_printer_aware_default_values()
+
+    def _printer_defaults_toggled(self, checked: bool) -> None:
+        if checked:
+            self._apply_printer_aware_default_values()
+        self._set_printability_threshold_controls_enabled(not checked)
+
+    def _refresh_printer_defaults_if_enabled(self) -> None:
+        if self.printability_printer_aware_defaults.isChecked():
+            self._apply_printer_aware_default_values()
+
+    def _apply_printer_aware_default_values(self) -> None:
+        defaults = derive_printer_aware_printability_defaults(self._printer_profile_from_controls())
+        self.printability_min_feature_width.setValue(defaults["minimum_feature_width_mm"])
+        self.printability_min_segment_length.setValue(defaults["minimum_segment_length_mm"])
+        self.printability_min_island_area.setValue(defaults["minimum_island_area_mm2"])
+        self.printability_min_connection_width.setValue(defaults["minimum_connection_width_mm"])
+        self.printability_max_mergeable_gap.setValue(defaults["maximum_mergeable_gap_mm"])
+        self.printability_min_hole_area.setValue(defaults["minimum_hole_area_mm2"])
+        self.printability_min_component_dimension.setValue(defaults["minimum_component_dimension_mm"])
+
+    def _set_printability_threshold_controls_enabled(self, enabled: bool) -> None:
+        for control in [
+            self.printability_min_feature_width,
+            self.printability_min_segment_length,
+            self.printability_min_island_area,
+            self.printability_min_connection_width,
+            self.printability_max_mergeable_gap,
+            self.printability_min_hole_area,
+            self.printability_min_component_dimension,
+        ]:
+            control.setEnabled(enabled)
 
     def update_room(self, room: str, state: str, message: str, thumbnail: str) -> None:
         if room in self.rooms:

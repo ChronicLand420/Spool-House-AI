@@ -113,15 +113,17 @@ stl:
   lithophane_sharpen_strength: 0.0
   lithophane_denoise_radius_px: 0
 
+printer:
+  profile_name: Generic FDM 0.4 mm nozzle
+  printer_type: fdm
+  nozzle_diameter_mm: 0.4
+  line_width_mm: 0.4
+  layer_height_mm: 0.20
+  first_layer_height_mm: 0.20
+
 printability:
+  use_printer_aware_defaults: true
   enforce_minimum_printable_geometry: true
-  minimum_feature_width_mm: 0.8
-  minimum_segment_length_mm: 1.5
-  minimum_island_area_mm2: 2.0
-  minimum_connection_width_mm: 0.8
-  maximum_mergeable_gap_mm: 0.6
-  minimum_hole_area_mm2: 1.0
-  minimum_component_dimension_mm: 0.8
 
 filament_swap_relief:
   width_mm: 120.0

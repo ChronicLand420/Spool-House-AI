@@ -406,6 +406,18 @@ stl:
   lithophane_sharpen_strength: 0.0
   lithophane_denoise_radius_px: 0
 
+printer:
+  profile_name: Generic FDM 0.4 mm nozzle
+  printer_type: fdm
+  nozzle_diameter_mm: 0.4
+  line_width_mm: 0.4
+  layer_height_mm: 0.20
+  first_layer_height_mm: 0.20
+
+printability:
+  use_printer_aware_defaults: true
+  enforce_minimum_printable_geometry: true
+
 filament_swap_relief:
   width_mm: 120.0
   color_count: 3
@@ -451,6 +463,8 @@ filament_swap_relief:
 - `raster_heightfield`: stable raster fallback that preserves existing SHAI behavior.
 
 `mesh_report.json` records the requested backend, actual backend, fallback reason, watertight status, edge counts, warnings, and failures.
+
+Printer-aware printability defaults derive practical minimum geometry values from the configured nozzle diameter and line width. The default `0.4 mm` profile resolves to the existing safe values: `0.8 mm` minimum feature width, `1.5 mm` minimum segment length, and `0.6 mm` maximum mergeable gap. Advanced users can turn printer-aware defaults off and set the minimum geometry values manually.
 
 ## Cleanup Presets / Artifact Reporting
 

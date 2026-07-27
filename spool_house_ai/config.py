@@ -132,6 +132,7 @@ class StlConfig:
 
 @dataclass(frozen=True)
 class PrintabilityConfig:
+    use_printer_aware_defaults: bool
     enforce_minimum_printable_geometry: bool
     minimum_feature_width_mm: float
     minimum_segment_length_mm: float
@@ -140,6 +141,16 @@ class PrintabilityConfig:
     maximum_mergeable_gap_mm: float
     minimum_hole_area_mm2: float
     minimum_component_dimension_mm: float
+
+
+@dataclass(frozen=True)
+class PrinterProfileConfig:
+    profile_name: str
+    printer_type: str
+    nozzle_diameter_mm: float
+    line_width_mm: float
+    layer_height_mm: float
+    first_layer_height_mm: float
 
 
 @dataclass(frozen=True)
@@ -200,6 +211,7 @@ class AppConfig:
     svg: SvgConfig
     stl: StlConfig
     printability: PrintabilityConfig
+    printer_profile: PrinterProfileConfig
     filament_swap_relief: FilamentSwapReliefConfig
     preview: PreviewConfig
 
@@ -219,7 +231,8 @@ def load_config(config_path: Path) -> AppConfig:
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    printability = _printability_config(raw_config.get("printability", {}))
+    printer_profile = _printer_profile_config(raw_config.get("printer", {}))
+    printability = _printability_config(raw_config.get("printability", {}), printer_profile)
 
     return AppConfig(
         project_root=project_root,
@@ -232,6 +245,7 @@ def load_config(config_path: Path) -> AppConfig:
         svg=_svg_config(raw_config.get("svg", {})),
         stl=_stl_config(raw_config.get("stl", {}), printability),
         printability=printability,
+        printer_profile=printer_profile,
         filament_swap_relief=_filament_swap_relief_config(raw_config.get("filament_swap_relief", {}), printability),
         preview=_preview_config(raw_config.get("preview", {})),
     )
@@ -531,35 +545,80 @@ def _stl_config(value: dict[str, Any], printability: PrintabilityConfig | None =
     )
 
 
-def _printability_config(value: dict[str, Any]) -> PrintabilityConfig:
+def _printer_profile_config(value: dict[str, Any]) -> PrinterProfileConfig:
+    return PrinterProfileConfig(
+        profile_name=str(value.get("profile_name", "Generic FDM 0.4 mm nozzle")),
+        printer_type=str(value.get("printer_type", "fdm")).strip().lower() or "fdm",
+        nozzle_diameter_mm=_positive_float(value.get("nozzle_diameter_mm", 0.4), "printer.nozzle_diameter_mm"),
+        line_width_mm=_positive_float(value.get("line_width_mm", value.get("nozzle_diameter_mm", 0.4)), "printer.line_width_mm"),
+        layer_height_mm=_positive_float(value.get("layer_height_mm", 0.20), "printer.layer_height_mm"),
+        first_layer_height_mm=_positive_float(value.get("first_layer_height_mm", 0.20), "printer.first_layer_height_mm"),
+    )
+
+
+def derive_printer_aware_printability_defaults(printer: PrinterProfileConfig) -> dict[str, float]:
+    """Return safe default printability thresholds from final print settings."""
+    nozzle = float(printer.nozzle_diameter_mm)
+    line_width = float(printer.line_width_mm)
+    minimum_feature_width = max(nozzle, line_width) * 2.0
+    return {
+        "minimum_feature_width_mm": _round_mm(minimum_feature_width),
+        "minimum_segment_length_mm": _round_mm(line_width * 3.75),
+        "minimum_island_area_mm2": _round_mm((line_width**2) * 12.5),
+        "minimum_connection_width_mm": _round_mm(minimum_feature_width),
+        "maximum_mergeable_gap_mm": _round_mm(line_width * 1.5),
+        "minimum_hole_area_mm2": _round_mm((line_width * 2.5) ** 2),
+        "minimum_component_dimension_mm": _round_mm(minimum_feature_width),
+    }
+
+
+def _printability_config(
+    value: dict[str, Any],
+    printer_profile: PrinterProfileConfig | None = None,
+) -> PrintabilityConfig:
+    use_printer_aware_defaults = bool(value.get("use_printer_aware_defaults", True))
+    printer_defaults = (
+        derive_printer_aware_printability_defaults(printer_profile or _printer_profile_config({}))
+        if use_printer_aware_defaults
+        else {
+            "minimum_feature_width_mm": 0.8,
+            "minimum_segment_length_mm": 1.5,
+            "minimum_island_area_mm2": 2.0,
+            "minimum_connection_width_mm": 0.8,
+            "maximum_mergeable_gap_mm": 0.6,
+            "minimum_hole_area_mm2": 1.0,
+            "minimum_component_dimension_mm": 0.8,
+        }
+    )
     return PrintabilityConfig(
+        use_printer_aware_defaults=use_printer_aware_defaults,
         enforce_minimum_printable_geometry=bool(value.get("enforce_minimum_printable_geometry", True)),
         minimum_feature_width_mm=_positive_float(
-            value.get("minimum_feature_width_mm", 0.8),
+            value.get("minimum_feature_width_mm", printer_defaults["minimum_feature_width_mm"]),
             "printability.minimum_feature_width_mm",
         ),
         minimum_segment_length_mm=_positive_float(
-            value.get("minimum_segment_length_mm", 1.5),
+            value.get("minimum_segment_length_mm", printer_defaults["minimum_segment_length_mm"]),
             "printability.minimum_segment_length_mm",
         ),
         minimum_island_area_mm2=_nonnegative_float(
-            value.get("minimum_island_area_mm2", 2.0),
+            value.get("minimum_island_area_mm2", printer_defaults["minimum_island_area_mm2"]),
             "printability.minimum_island_area_mm2",
         ),
         minimum_connection_width_mm=_positive_float(
-            value.get("minimum_connection_width_mm", 0.8),
+            value.get("minimum_connection_width_mm", printer_defaults["minimum_connection_width_mm"]),
             "printability.minimum_connection_width_mm",
         ),
         maximum_mergeable_gap_mm=_nonnegative_float(
-            value.get("maximum_mergeable_gap_mm", 0.6),
+            value.get("maximum_mergeable_gap_mm", printer_defaults["maximum_mergeable_gap_mm"]),
             "printability.maximum_mergeable_gap_mm",
         ),
         minimum_hole_area_mm2=_nonnegative_float(
-            value.get("minimum_hole_area_mm2", 1.0),
+            value.get("minimum_hole_area_mm2", printer_defaults["minimum_hole_area_mm2"]),
             "printability.minimum_hole_area_mm2",
         ),
         minimum_component_dimension_mm=_nonnegative_float(
-            value.get("minimum_component_dimension_mm", 0.8),
+            value.get("minimum_component_dimension_mm", printer_defaults["minimum_component_dimension_mm"]),
             "printability.minimum_component_dimension_mm",
         ),
     )
@@ -726,3 +785,7 @@ def _positive_float(value: Any, name: str) -> float:
     if selected <= 0:
         raise ValueError(f"{name} must be greater than zero; got {value!r}.")
     return selected
+
+
+def _round_mm(value: float) -> float:
+    return round(float(value), 4)

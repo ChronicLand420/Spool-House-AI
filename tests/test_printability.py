@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from spool_house_ai.config import apply_cleanup_preset, load_config
+from spool_house_ai.config import apply_cleanup_preset, derive_printer_aware_printability_defaults, load_config
 from spool_house_ai.output_paths import build_job_output_paths
 from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.processing.printability import (
@@ -28,6 +28,12 @@ class PrintabilityTests(unittest.TestCase):
         self.printability = self.config.printability
 
     def test_printability_defaults_load(self) -> None:
+        self.assertEqual(self.config.printer_profile.profile_name, "Generic FDM 0.4 mm nozzle")
+        self.assertAlmostEqual(self.config.printer_profile.nozzle_diameter_mm, 0.4)
+        self.assertAlmostEqual(self.config.printer_profile.line_width_mm, 0.4)
+        self.assertAlmostEqual(self.config.printer_profile.layer_height_mm, 0.2)
+        self.assertAlmostEqual(self.config.printer_profile.first_layer_height_mm, 0.2)
+        self.assertTrue(self.printability.use_printer_aware_defaults)
         self.assertTrue(self.printability.enforce_minimum_printable_geometry)
         self.assertAlmostEqual(self.printability.minimum_feature_width_mm, 0.8)
         self.assertAlmostEqual(self.printability.minimum_segment_length_mm, 1.5)
@@ -38,6 +44,71 @@ class PrintabilityTests(unittest.TestCase):
         self.assertAlmostEqual(self.printability.minimum_component_dimension_mm, 0.8)
         self.assertEqual(self.config.stl.printability, self.printability)
         self.assertEqual(self.config.filament_swap_relief.printability, self.printability)
+
+    def test_printer_aware_defaults_scale_from_nozzle_and_line_width(self) -> None:
+        profile = replace(self.config.printer_profile, nozzle_diameter_mm=0.6, line_width_mm=0.6)
+
+        defaults = derive_printer_aware_printability_defaults(profile)
+
+        self.assertAlmostEqual(defaults["minimum_feature_width_mm"], 1.2)
+        self.assertAlmostEqual(defaults["minimum_segment_length_mm"], 2.25)
+        self.assertAlmostEqual(defaults["minimum_island_area_mm2"], 4.5)
+        self.assertAlmostEqual(defaults["minimum_connection_width_mm"], 1.2)
+        self.assertAlmostEqual(defaults["maximum_mergeable_gap_mm"], 0.9)
+        self.assertAlmostEqual(defaults["minimum_hole_area_mm2"], 2.25)
+        self.assertAlmostEqual(defaults["minimum_component_dimension_mm"], 1.2)
+
+    def test_missing_printability_thresholds_derive_from_printer_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / "config"
+            config_dir.mkdir()
+            config_path = config_dir / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "printer:",
+                        "  nozzle_diameter_mm: 0.6",
+                        "  line_width_mm: 0.6",
+                        "printability:",
+                        "  use_printer_aware_defaults: true",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertTrue(config.printability.use_printer_aware_defaults)
+            self.assertAlmostEqual(config.printability.minimum_feature_width_mm, 1.2)
+            self.assertAlmostEqual(config.printability.minimum_segment_length_mm, 2.25)
+            self.assertAlmostEqual(config.printability.maximum_mergeable_gap_mm, 0.9)
+
+    def test_explicit_printability_thresholds_override_printer_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / "config"
+            config_dir.mkdir()
+            config_path = config_dir / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "printer:",
+                        "  nozzle_diameter_mm: 0.6",
+                        "  line_width_mm: 0.6",
+                        "printability:",
+                        "  use_printer_aware_defaults: true",
+                        "  minimum_feature_width_mm: 1.4",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+            self.assertTrue(config.printability.use_printer_aware_defaults)
+            self.assertAlmostEqual(config.printability.minimum_feature_width_mm, 1.4)
+            self.assertAlmostEqual(config.printability.minimum_segment_length_mm, 2.25)
 
     def test_same_pixel_island_uses_final_physical_scale(self) -> None:
         mask = np.zeros((20, 20), dtype=bool)
