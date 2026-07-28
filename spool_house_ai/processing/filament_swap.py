@@ -19,7 +19,7 @@ from spool_house_ai.processing.stl import StlCreationResult, export_generic_3mf_
 
 
 FILAMENT_SWAP_BACKEND = "filament_swap_heightfield"
-MAX_FILAMENT_CONTOUR_PIXELS = 1_500_000
+MAX_FILAMENT_CONTOUR_PIXELS = 6_500_000
 FILAMENT_VECTOR_SHELL_OVERLAP_MM = 0.01
 FILAMENT_VECTOR_POLYGON_REPAIR_FACTORS = (0.0, 0.02, 0.05, 0.1)
 
@@ -165,6 +165,8 @@ def create_filament_swap_relief_stl(
         "similar_color_hue_tolerance_degrees": round(float(config.similar_color_hue_tolerance_degrees), 4),
         "similar_color_max_area_ratio": round(float(config.similar_color_max_area_ratio), 4),
         "solid_base_enabled": bool(config.solid_base_enabled),
+        "solid_base_thickness_mm": round(float(config.solid_base_thickness_mm), 4),
+        "solid_base_color_band_height_mm": round(float(config.solid_base_color_band_height_mm), 4),
         "similar_color_merge_count": color_merge_metadata["merge_count"],
         "similar_color_merges": color_merge_metadata["merges"],
         "clustering_seed": int(config.palette_random_seed),
@@ -193,6 +195,7 @@ def create_filament_swap_relief_stl(
         "downscaled": bool(load_metadata["source_downscaled"]),
         "source_downscaled": bool(load_metadata["source_downscaled"]),
         "max_sampled_pixels": int(config.max_sampled_pixels),
+        "detail_quality": color_plan.get("detail_quality", ""),
         "heightfield_topology_repair_pixels": int(topology_repair_pixels),
         "mesh_style": config.mesh_style,
         "mesh_generation_mode": bounds_metadata.get("mesh_generation_mode", "pixel_heightfield"),
@@ -331,6 +334,8 @@ def _swap_plan_summary(color_plan: dict[str, Any]) -> dict[str, Any]:
         "total_printed_layers": color_plan.get("total_printed_layers"),
         "final_top_layer": color_plan.get("final_top_layer"),
         "snapping_occurred": color_plan.get("snapping_occurred", False),
+        "solid_base_plate": color_plan.get("solid_base_plate", {"enabled": False}),
+        "shop_ready_checklist": color_plan.get("shop_ready_checklist", []),
         "warnings": color_plan.get("warnings", []),
         "colors": [
             {
@@ -369,25 +374,53 @@ def _format_filament_swap_plan(color_plan: dict[str, Any]) -> str:
         f"- First layer height: {layer_settings.get('first_layer_height_mm', '')} mm",
         f"- Normal layer height: {layer_settings.get('layer_height_mm', '')} mm",
         f"- Alignment mode: {layer_settings.get('height_alignment_mode', '')}",
+        f"- Detail quality: {color_plan.get('detail_quality', '')}",
         "",
         "Height settings:",
         f"- Requested base height: {height_settings.get('requested_base_height_mm', '')} mm",
         f"- Requested step height: {height_settings.get('requested_step_height_mm', '')} mm",
         f"- Aligned total thickness: {color_plan.get('total_aligned_thickness_mm', '')} mm",
         "",
+        "Quick print checklist:",
+        *[f"- {item}" for item in color_plan.get("shop_ready_checklist", [])],
+        "",
     ]
     colors = color_plan.get("colors", [])
     if colors:
+        solid_base = color_plan.get("solid_base_plate") or {}
+        if solid_base.get("enabled"):
+            lines.extend(
+                [
+                    "SOLID BASE PLATE",
+                    f"Color: {solid_base.get('color_hex', '') or solid_base.get('suggested_color_name', 'Base filament')}",
+                    f"Layers: {solid_base.get('first_layer', '')} through {solid_base.get('last_layer', '')}",
+                    f"Top Z: {solid_base.get('top_z_mm', '')} mm",
+                    "",
+                ]
+            )
         first = colors[0]
-        lines.extend(
-            [
-                "START WITH",
-                f"Color: {first.get('hex', '') or first.get('suggested_color_name', 'color')}",
-                f"Layers: {first.get('first_layer_using_color', '')} through {first.get('last_layer_using_color', '')}",
-                f"Top Z: {first.get('aligned_top_z_mm', '')} mm",
-                "",
-            ]
-        )
+        if solid_base.get("enabled"):
+            lines.extend(
+                [
+                    f"CHANGE BEFORE LAYER {first.get('change_before_layer', '')}",
+                    f"Transition Z: {first.get('aligned_start_z_mm', '')} mm",
+                    f"Load: {first.get('hex', '') or first.get('suggested_color_name', 'color')}",
+                    f"Previous filament last used on layer {first.get('previous_filament_last_layer', '')}",
+                    f"New filament layers: {first.get('first_layer_using_color', '')} through {first.get('last_layer_using_color', '')}",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "START WITH",
+                    f"Color: {first.get('hex', '') or first.get('suggested_color_name', 'color')}",
+                    f"Layers: {first.get('first_layer_using_color', '')} through {first.get('last_layer_using_color', '')}",
+                    f"Start Z: {first.get('aligned_start_z_mm', '')} mm",
+                    f"Top Z: {first.get('aligned_top_z_mm', '')} mm",
+                    "",
+                ]
+            )
         for color in colors[1:]:
             change_layer = color.get("change_before_layer")
             previous_layer = color.get("previous_filament_last_layer")
@@ -419,6 +452,55 @@ def _format_filament_swap_plan(color_plan: dict[str, Any]) -> str:
     else:
         lines.append("- None")
     return "\n".join(lines) + "\n"
+
+
+def _detail_quality_label(max_sampled_pixels: int) -> str:
+    pixels = int(max_sampled_pixels)
+    if pixels >= 1_600_000:
+        return "Ultra detail"
+    if pixels >= 700_000:
+        return "High detail"
+    if pixels >= 320_000:
+        return "Standard detail"
+    return f"Custom detail ({pixels} sampled pixels)"
+
+
+def _shop_ready_checklist(config: FilamentSwapReliefConfig, color_plan: dict[str, Any]) -> list[str]:
+    colors = color_plan.get("colors") or []
+    solid_base = color_plan.get("solid_base_plate") or {}
+    swap_count = len(colors) if solid_base.get("enabled") else max(0, len(colors) - 1)
+    base_color = colors[0].get("hex", "first color") if colors else "first color"
+    checklist = [
+        "Do not rescale the STL or 3MF in the slicer after generating this plan.",
+        (
+            "Set the slicer to first layer "
+            f"{float(config.first_layer_height_mm):.2f} mm and normal layer {float(config.layer_height_mm):.2f} mm."
+        ),
+        (
+            f"Start with base filament; perform {swap_count} manual filament change(s)."
+            if solid_base.get("enabled")
+            else f"Start with {base_color}; perform {swap_count} manual filament change(s)."
+        ),
+        "Use the listed one-based 'Change before layer' numbers exactly.",
+        "Spool House Studio does not embed G-code or slicer color-change markers in the generic 3MF.",
+    ]
+    if solid_base.get("enabled"):
+        checklist.insert(
+            2,
+            (
+                "Solid base plate prints first: "
+                f"{solid_base.get('aligned_thickness_mm', '')} mm / {solid_base.get('layer_count', '')} layers."
+            ),
+        )
+        checklist.insert(
+            3,
+            f"Change before layer {colors[0].get('change_before_layer', '')} to start the first artwork color.",
+        )
+        checklist.insert(
+            4,
+            f"Each detected color band above the base is {float(config.solid_base_color_band_height_mm):.2f} mm tall.",
+        )
+    return checklist
 
 
 def _cluster_color_labels(
@@ -687,6 +769,9 @@ def _height_map_for_labels(
         height_alignment_mode=config.height_alignment_mode,
         height_alignment_tolerance_mm=config.height_alignment_tolerance_mm,
         min_model_thickness_mm=config.min_model_thickness_mm,
+        solid_base_enabled=config.solid_base_enabled,
+        solid_base_thickness_mm=config.solid_base_thickness_mm,
+        solid_base_color_band_height_mm=config.solid_base_color_band_height_mm,
         source=source_metadata,
         palette_order=config.color_order,
     )
@@ -694,9 +779,11 @@ def _height_map_for_labels(
     color_plan["mesh_style"] = config.mesh_style
     color_plan["merge_similar_colors"] = bool(config.merge_similar_colors)
     color_plan["solid_base_enabled"] = bool(config.solid_base_enabled)
+    color_plan["detail_quality"] = _detail_quality_label(config.max_sampled_pixels)
+    color_plan["shop_ready_checklist"] = _shop_ready_checklist(config, color_plan)
     color_rows = color_plan["colors"]
     if config.solid_base_enabled and color_rows:
-        height_map[:, :] = float(color_rows[0]["aligned_top_z_mm"])
+        height_map[:, :] = float(color_plan["solid_base_plate"]["aligned_thickness_mm"])
     for row in color_rows:
         mask = labels == int(row["cluster_label"])
         height_map[mask] = float(row["aligned_top_z_mm"])

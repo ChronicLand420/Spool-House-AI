@@ -271,7 +271,7 @@ This first version is intentionally simple: flat panels only, no curved lamp sha
 
 Filament Swap Relief turns flat color artwork into one solid stepped-height STL for manual filament changes. Each detected printable color becomes a different final height. By default, `Relief style = Stacked blocks`: the largest printable color becomes the base, and the remaining color groups become raised building-block layers above it. This prevents sign text, borders, and color-swap details from becoming recessed engravings just because they are brighter than the base color.
 
-For a two-color green/yellow sign, stacked blocks prints the green body as the base and raises the yellow text/border on top. If you intentionally want the older recessed/luminance behavior, choose `Relief style = Engraved / recessed`. Enable `Solid base plate` when you want ignored/background areas filled as a flat base under the artwork instead of cut away. Use `Detail quality` to trade speed/file size for smoother curves and straighter diagonal edges; High is the default, while Ultra samples more of the source image for demanding line art.
+For a two-color green/yellow sign, stacked blocks prints the green body as the base and raises the yellow text/border on top. If you intentionally want the older recessed/luminance behavior, choose `Relief style = Engraved / recessed`. Enable `Solid base plate` when you want ignored/background areas filled as a flat foundation under the artwork instead of cut away. In solid-base mode, the base plate is `2.0 mm` thick by default, then the plan changes before the first artwork color at layer 11 when using `0.20 mm` layers. Every detected color band above the base is `0.8 mm` thick, regardless of color count. Use `Detail quality` to trade speed/file size for smoother curves and straighter diagonal edges; High is the default, while Ultra samples more of the source image for demanding line art. Filament Relief traces color regions with upsampled vector contours by default, so curved borders and diagonal strokes are smoothed before STL/3MF export instead of being left as raw pixel stairs.
 
 With the default layer settings, a typical three-level model becomes roughly:
 
@@ -282,7 +282,7 @@ With the default layer settings, a typical three-level model becomes roughly:
 
 This is a single solid layer-cake model, not true per-layer multicolor, G-code, MMU/AMS output, or separate STL files per color. It works best with clean logos, decals, signs, anime-style title art, and other flat-color artwork. Cleanup presets, SVG tracing, detail handling, and vector/raster backend choices do not apply to this mode. No AI is used. Use artwork you own or have permission to print.
 
-Manual swap planning is layer-aware. Set the first-layer height, normal layer height, and alignment mode in the Filament Swap Relief controls. Reports use one-based layer numbers: “Change before layer N” means finish layer `N-1`, pause the printer, load the next filament, and print layer `N` with the new filament. With default `0.20 mm` first/normal layers, the default `0.80 / 0.40 mm` heights remain unchanged. If custom heights do not land on real layer starts, Spool House Studio can snap them upward, snap to nearest, or reject them in strict mode.
+Manual swap planning is layer-aware. Set the first-layer height, normal layer height, and alignment mode in the Filament Swap Relief controls. Reports use one-based layer numbers: “Change before layer N” means finish layer `N-1`, pause the printer, load the next filament, and print layer `N` with the new filament. With default `0.20 mm` first/normal layers, the default `0.80 / 0.40 mm` heights remain unchanged. If custom heights do not land on real layer starts, Spool House Studio can snap them upward, snap to nearest, or reject them in strict mode. The text swap plan includes a short shop checklist reminding you to keep the slicer scale unchanged and match the slicer first-layer/normal-layer heights to the generated plan.
 
 Filament Swap Relief has its own detail-quality, palette, shade-merge, and island controls. RGB palette clustering remains the default for backward-compatible output, while LAB clustering can be selected experimentally for more perceptual color grouping. Similar color shade merging is enabled by default so tiny same-hue shading or antialias clusters do not accidentally become separate filament-swap layers. Island Handling controls what happens to disconnected color components after segmentation:
 
@@ -442,6 +442,8 @@ filament_swap_relief:
   similar_color_hue_tolerance_degrees: 18.0
   similar_color_max_area_ratio: 0.12
   solid_base_enabled: false
+  solid_base_thickness_mm: 2.0
+  solid_base_color_band_height_mm: 0.8
   island_policy: remove_below_threshold
   island_merge_max_distance_px: 8
   island_merge_fallback: remove
@@ -451,7 +453,8 @@ filament_swap_relief:
   island_report_components: true
   relief_style: stacked_blocks
   mesh_style: vector_contours
-  contour_simplify_tolerance_px: 0.45
+  contour_upsample_factor: 2
+  contour_simplify_tolerance_px: 0.35
   contour_smoothing_enabled: true
   contour_smoothing_strength: 2
 ```

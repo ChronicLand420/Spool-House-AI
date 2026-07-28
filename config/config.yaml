@@ -149,6 +149,8 @@ filament_swap_relief:
   similar_color_hue_tolerance_degrees: 18.0
   similar_color_max_area_ratio: 0.12
   solid_base_enabled: false
+  solid_base_thickness_mm: 2.0
+  solid_base_color_band_height_mm: 0.8
   island_policy: remove_below_threshold
   island_merge_max_distance_px: 8
   island_merge_fallback: remove
@@ -159,7 +161,7 @@ filament_swap_relief:
   relief_style: stacked_blocks
   mesh_style: vector_contours
   contour_upsample_factor: 2
-  contour_simplify_tolerance_px: 0.45
+  contour_simplify_tolerance_px: 0.35
   contour_smoothing_enabled: true
   contour_smoothing_strength: 2
 

@@ -1289,6 +1289,7 @@ class MainWindow(QMainWindow):
             signal.connect(self._refresh_filament_color_plan_estimate)
         self.filament_alignment_mode.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
         self.filament_relief_style.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
+        self.filament_solid_base.toggled.connect(self._refresh_filament_color_plan_estimate)
 
         preset_group = self._form_group("Presets", [("Artwork style", self.cleanup_preset)])
         self.preset_help = QLabel("")
@@ -1712,13 +1713,24 @@ class MainWindow(QMainWindow):
                 layer_height_mm=self.filament_normal_layer_height.value(),
                 height_alignment_mode=self._combo_value(self.filament_alignment_mode),
                 height_alignment_tolerance_mm=self.config.filament_swap_relief.height_alignment_tolerance_mm,
+                solid_base_enabled=self.filament_solid_base.isChecked(),
+                solid_base_thickness_mm=self.config.filament_swap_relief.solid_base_thickness_mm,
+                solid_base_color_band_height_mm=self.config.filament_swap_relief.solid_base_color_band_height_mm,
                 palette_order="estimate",
             )
         except Exception as error:
             self.filament_plan_note.setText(f"Estimated color plan unavailable: {error}")
             self.filament_plan_table.setRowCount(0)
             return
-        self.filament_plan_note.setText("Estimated rows use current settings. Exact colors appear after generation.")
+        if plan.get("solid_base_plate", {}).get("enabled"):
+            base = plan["solid_base_plate"]
+            self.filament_plan_note.setText(
+                "Estimated rows use current settings. "
+                f"Solid base: {base.get('aligned_thickness_mm')} mm / {base.get('layer_count')} layers. "
+                "Exact colors appear after generation."
+            )
+        else:
+            self.filament_plan_note.setText("Estimated rows use current settings. Exact colors appear after generation.")
         self._populate_filament_color_plan_table(plan, estimated=True)
 
     def _load_generated_filament_color_plan(self) -> None:
@@ -1731,14 +1743,42 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self.filament_plan_note.setText(f"Could not read generated color plan: {error}")
             return
-        self.filament_plan_note.setText("Exact generated color plan from reports/color_plan.json.")
+        if plan.get("solid_base_plate", {}).get("enabled"):
+            base = plan["solid_base_plate"]
+            self.filament_plan_note.setText(
+                "Exact generated color plan from reports/color_plan.json. "
+                f"Solid base: {base.get('aligned_thickness_mm')} mm / layers "
+                f"{base.get('first_layer')} through {base.get('last_layer')}."
+            )
+        else:
+            self.filament_plan_note.setText("Exact generated color plan from reports/color_plan.json.")
         self._populate_filament_color_plan_table(plan, estimated=False)
 
     def _populate_filament_color_plan_table(self, plan: dict, *, estimated: bool) -> None:
         colors = plan.get("colors") or []
-        self.filament_plan_table.setRowCount(len(colors))
+        solid_base = plan.get("solid_base_plate") or {}
+        has_solid_base = bool(solid_base.get("enabled"))
+        self.filament_plan_table.setRowCount(len(colors) + (1 if has_solid_base else 0))
+        row_offset = 0
+        if has_solid_base:
+            values = [
+                "Base",
+                "",
+                str(solid_base.get("color_hex", "")),
+                "0.00",
+                "0.00",
+                str(solid_base.get("first_layer", "")),
+                str(solid_base.get("last_layer", "")),
+                "",
+                str(solid_base.get("layer_count", "")),
+                f"Solid base top {solid_base.get('top_z_mm', '')} mm",
+            ]
+            self._set_filament_plan_table_row(0, values, str(solid_base.get("color_hex", "")))
+            row_offset = 1
         for row_index, color in enumerate(colors):
             warning = "; ".join(color.get("warnings") or [])
+            if color.get("starts_after_solid_base") and not warning:
+                warning = f"Starts after {color.get('aligned_start_z_mm', '')} mm base"
             values = [
                 str(color.get("order", color.get("index", row_index + 1))),
                 "",
@@ -1751,16 +1791,18 @@ class MainWindow(QMainWindow):
                 str(color.get("layer_count", "")),
                 "Estimate" if estimated and not warning else warning,
             ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if column == 1:
-                    hex_color = str(color.get("hex", ""))
-                    if hex_color.startswith("#") and len(hex_color) == 7:
-                        item.setBackground(QColor(hex_color))
-                    else:
-                        item.setText("TBD")
-                self.filament_plan_table.setItem(row_index, column, item)
+            self._set_filament_plan_table_row(row_index + row_offset, values, str(color.get("hex", "")))
         self.filament_plan_table.resizeColumnsToContents()
+
+    def _set_filament_plan_table_row(self, row_index: int, values: list[str], hex_color: str) -> None:
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            if column == 1:
+                if hex_color.startswith("#") and len(hex_color) == 7:
+                    item.setBackground(QColor(hex_color))
+                else:
+                    item.setText("TBD")
+            self.filament_plan_table.setItem(row_index, column, item)
 
     def open_settings(self) -> None:
         if self.settings_dialog is None:

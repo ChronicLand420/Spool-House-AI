@@ -914,9 +914,24 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
                 "",
             ]
         )
+        shop_checklist = swap_summary.get("shop_ready_checklist") or []
+        if shop_checklist:
+            lines.append("Shop-ready checklist:")
+            lines.extend(f"- {item}" for item in shop_checklist)
+            lines.append("")
+        solid_base_plate = swap_summary.get("solid_base_plate") or {}
+        if solid_base_plate.get("enabled"):
+            lines.extend(
+                [
+                    "Solid base plate:",
+                    f"- Layers `{solid_base_plate.get('first_layer', '')}` through `{solid_base_plate.get('last_layer', '')}`",
+                    f"- Top Z `{solid_base_plate.get('top_z_mm', '')} mm`",
+                    "",
+                ]
+            )
         detected_colors = (swap_summary.get("colors") or filament_swap.get("detected_colors") or [])
         for color in detected_colors:
-            if color.get("order", color.get("index")) == 1:
+            if color.get("order", color.get("index")) == 1 and not solid_base_plate.get("enabled"):
                 lines.append(
                     f"- Start with `{color.get('hex', '')}` / {color.get('suggested_color_name', 'color')}, "
                     f"layers `{color.get('first_layer_using_color', '')}` through `{color.get('last_layer_using_color', '')}` "

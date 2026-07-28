@@ -112,6 +112,9 @@ def calculate_filament_swap_plan(
     height_alignment_mode: str = "snap_up",
     height_alignment_tolerance_mm: float = 0.001,
     min_model_thickness_mm: float = 0.0,
+    solid_base_enabled: bool = False,
+    solid_base_thickness_mm: float = 2.0,
+    solid_base_color_band_height_mm: float = 0.8,
     source: Mapping[str, Any] | None = None,
     palette_order: str = "light_to_dark",
 ) -> dict[str, Any]:
@@ -124,10 +127,19 @@ def calculate_filament_swap_plan(
         layer_height_mm,
         height_alignment_tolerance_mm,
         min_model_thickness_mm,
+        solid_base_thickness_mm,
+        solid_base_color_band_height_mm,
     )
     alignment_mode = _normalize_alignment_mode(height_alignment_mode)
     color_count = len(colors)
-    requested_boundaries = _requested_cumulative_boundaries(color_count, base_height_mm, layer_step_mm)
+    if solid_base_enabled:
+        requested_boundaries = _requested_solid_base_cumulative_boundaries(
+            color_count,
+            solid_base_thickness_mm,
+            solid_base_color_band_height_mm,
+        )
+    else:
+        requested_boundaries = _requested_cumulative_boundaries(color_count, base_height_mm, layer_step_mm)
     if min_model_thickness_mm > 0 and requested_boundaries[-1] < min_model_thickness_mm:
         requested_boundaries[-1] = float(min_model_thickness_mm)
     aligned_indices = [0]
@@ -146,6 +158,13 @@ def calculate_filament_swap_plan(
     if min_model_thickness_mm > 0 and base_height_mm + ((color_count - 1) * layer_step_mm) < min_model_thickness_mm:
         warnings.append(
             "Final model thickness was increased to satisfy the configured minimum finished thickness."
+        )
+    if solid_base_enabled:
+        warnings = [
+            warning for warning in warnings if "minimum finished thickness" not in warning
+        ]
+        warnings.append(
+            "Solid base plate mode used a dedicated base thickness and equal color-band thicknesses."
         )
 
     for boundary_number, requested_z in enumerate(requested_boundaries[1:], start=1):
@@ -181,14 +200,32 @@ def calculate_filament_swap_plan(
         boundary_snap_records.append(snap)
 
     plan_colors: list[dict[str, Any]] = []
+    base_plate = None
+    color_boundary_offset = 0
+    if solid_base_enabled:
+        base_plate_boundary_index = aligned_indices[1]
+        base_plate = {
+            "enabled": True,
+            "requested_thickness_mm": _round_mm(solid_base_thickness_mm),
+            "aligned_thickness_mm": _round_mm(aligned_boundaries[1]),
+            "first_layer": 1,
+            "last_layer": int(base_plate_boundary_index),
+            "layer_count": int(base_plate_boundary_index),
+            "top_z_mm": _round_mm(aligned_boundaries[1]),
+            "color_hex": "",
+            "suggested_color_name": "Base filament",
+        }
+        color_boundary_offset = 1
+
     for zero_index, color in enumerate(colors):
         order = zero_index + 1
-        start_boundary_index = aligned_indices[zero_index]
-        top_boundary_index = aligned_indices[zero_index + 1]
-        requested_start = requested_boundaries[zero_index]
-        requested_top = requested_boundaries[zero_index + 1]
-        aligned_start = aligned_boundaries[zero_index]
-        aligned_top = aligned_boundaries[zero_index + 1]
+        start_index = zero_index + color_boundary_offset
+        start_boundary_index = aligned_indices[start_index]
+        top_boundary_index = aligned_indices[start_index + 1]
+        requested_start = requested_boundaries[start_index]
+        requested_top = requested_boundaries[start_index + 1]
+        aligned_start = aligned_boundaries[start_index]
+        aligned_top = aligned_boundaries[start_index + 1]
         layer_count = top_boundary_index - start_boundary_index
         if layer_count <= 0:
             raise ValueError(f"Filament Swap Relief color band {order} collapsed to zero layers.")
@@ -197,7 +234,7 @@ def calculate_filament_swap_plan(
         row_warnings: list[str] = []
         if layer_count == 1:
             row_warnings.append("Color band is one printed layer thick.")
-        row_warnings.extend(boundary_snap_records[zero_index + 1].get("warnings") or [])
+        row_warnings.extend(boundary_snap_records[start_index + 1].get("warnings") or [])
         requested_start_snapped = abs(aligned_start - requested_start) > height_alignment_tolerance_mm
         requested_top_snapped = abs(aligned_top - requested_top) > height_alignment_tolerance_mm
         source_color = deepcopy(dict(color))
@@ -212,12 +249,13 @@ def calculate_filament_swap_plan(
                 "requested_top_z_mm": _round_mm(requested_top),
                 "aligned_top_z_mm": _round_mm(aligned_top),
                 "assigned_height_mm": _round_mm(aligned_top),
-                "filament_change_at_mm": 0.0 if order == 1 else _round_mm(aligned_start),
+                "filament_change_at_mm": _round_mm(aligned_start) if solid_base_enabled or order > 1 else 0.0,
                 "first_layer_using_color": int(first_layer),
                 "last_layer_using_color": int(last_layer),
                 "layer_count": int(layer_count),
-                "change_before_layer": None if order == 1 else int(first_layer),
-                "previous_filament_last_layer": None if order == 1 else int(first_layer - 1),
+                "change_before_layer": int(first_layer) if solid_base_enabled or order > 1 else None,
+                "previous_filament_last_layer": int(first_layer - 1) if solid_base_enabled or order > 1 else None,
+                "starts_after_solid_base": bool(solid_base_enabled and order == 1),
                 "snapped_start": bool(requested_start_snapped),
                 "snapped_top": bool(requested_top_snapped),
                 "warnings": row_warnings,
@@ -244,10 +282,14 @@ def calculate_filament_swap_plan(
             "requested_base_height_mm": _round_mm(base_height_mm),
             "requested_step_height_mm": _round_mm(layer_step_mm),
             "minimum_model_thickness_mm": _round_mm(min_model_thickness_mm),
+            "solid_base_enabled": bool(solid_base_enabled),
+            "solid_base_thickness_mm": _round_mm(solid_base_thickness_mm) if solid_base_enabled else 0.0,
+            "solid_base_color_band_height_mm": _round_mm(solid_base_color_band_height_mm) if solid_base_enabled else 0.0,
             "aligned_first_transition_mm": _round_mm(aligned_boundaries[1]) if len(aligned_boundaries) > 1 else 0.0,
             "requested_cumulative_boundaries_mm": [_round_mm(value) for value in requested_boundaries],
             "aligned_cumulative_boundaries_mm": [_round_mm(value) for value in aligned_boundaries],
         },
+        "solid_base_plate": base_plate or {"enabled": False},
         "palette_order": palette_order,
         "colors": plan_colors,
         "total_requested_thickness_mm": _round_mm(requested_boundaries[-1]),
@@ -261,6 +303,17 @@ def calculate_filament_swap_plan(
 
 def _requested_cumulative_boundaries(color_count: int, base_height_mm: float, layer_step_mm: float) -> list[float]:
     return [0.0] + [float(base_height_mm + ((index - 1) * layer_step_mm)) for index in range(1, color_count + 1)]
+
+
+def _requested_solid_base_cumulative_boundaries(
+    color_count: int,
+    solid_base_thickness_mm: float,
+    color_band_height_mm: float,
+) -> list[float]:
+    return [0.0] + [
+        float(solid_base_thickness_mm + (index * color_band_height_mm))
+        for index in range(0, color_count + 1)
+    ]
 
 
 def _boundary_z(boundary_index: int, first_layer_height: float, layer_height: float) -> float:
@@ -369,6 +422,8 @@ def _validate_height_settings(
     layer_height_mm: float,
     tolerance: float,
     min_model_thickness_mm: float = 0.0,
+    solid_base_thickness_mm: float = 2.0,
+    solid_base_color_band_height_mm: float = 0.8,
 ) -> None:
     if float(base_height_mm) <= 0:
         raise ValueError("base_height_mm must be greater than zero.")
@@ -376,6 +431,10 @@ def _validate_height_settings(
         raise ValueError("layer_step_mm must be greater than zero.")
     if float(min_model_thickness_mm) < 0:
         raise ValueError("min_model_thickness_mm must be nonnegative.")
+    if float(solid_base_thickness_mm) <= 0:
+        raise ValueError("solid_base_thickness_mm must be greater than zero.")
+    if float(solid_base_color_band_height_mm) <= 0:
+        raise ValueError("solid_base_color_band_height_mm must be greater than zero.")
     _validate_layer_settings(first_layer_height_mm, layer_height_mm, tolerance)
 
 

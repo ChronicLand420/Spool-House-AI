@@ -183,6 +183,8 @@ class FilamentSwapReliefConfig:
     similar_color_hue_tolerance_degrees: float
     similar_color_max_area_ratio: float
     solid_base_enabled: bool
+    solid_base_thickness_mm: float
+    solid_base_color_band_height_mm: float
     island_policy: str
     island_merge_max_distance_px: int
     island_merge_fallback: str
@@ -724,6 +726,14 @@ def _filament_swap_relief_config(
             "filament_swap_relief.similar_color_max_area_ratio",
         ),
         solid_base_enabled=bool(value.get("solid_base_enabled", False)),
+        solid_base_thickness_mm=_positive_float(
+            value.get("solid_base_thickness_mm", 2.0),
+            "filament_swap_relief.solid_base_thickness_mm",
+        ),
+        solid_base_color_band_height_mm=_positive_float(
+            value.get("solid_base_color_band_height_mm", 0.8),
+            "filament_swap_relief.solid_base_color_band_height_mm",
+        ),
         island_policy=island_policy,
         island_merge_max_distance_px=_nonnegative_int(
             value.get("island_merge_max_distance_px", 8),
@@ -747,7 +757,7 @@ def _filament_swap_relief_config(
             _nonnegative_int(value.get("contour_upsample_factor", 2), "filament_swap_relief.contour_upsample_factor"),
         ),
         contour_simplify_tolerance_px=_nonnegative_float(
-            value.get("contour_simplify_tolerance_px", 0.45),
+            value.get("contour_simplify_tolerance_px", 0.35),
             "filament_swap_relief.contour_simplify_tolerance_px",
         ),
         contour_smoothing_enabled=bool(value.get("contour_smoothing_enabled", True)),

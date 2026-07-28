@@ -16,6 +16,7 @@ from spool_house_ai.output_paths import build_job_output_paths
 from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.processing.filament_swap import (
     FILAMENT_SWAP_BACKEND,
+    _effective_contour_upsample_factor,
     _stacked_shell_vector_mesh_from_height_map,
     create_filament_swap_relief_stl,
 )
@@ -42,10 +43,12 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertAlmostEqual(config.filament_swap_relief.similar_color_hue_tolerance_degrees, 18.0)
         self.assertAlmostEqual(config.filament_swap_relief.similar_color_max_area_ratio, 0.12)
         self.assertFalse(config.filament_swap_relief.solid_base_enabled)
+        self.assertAlmostEqual(config.filament_swap_relief.solid_base_thickness_mm, 2.0)
+        self.assertAlmostEqual(config.filament_swap_relief.solid_base_color_band_height_mm, 0.8)
         self.assertEqual(config.filament_swap_relief.relief_style, "stacked_blocks")
         self.assertEqual(config.filament_swap_relief.mesh_style, "vector_contours")
         self.assertEqual(config.filament_swap_relief.contour_upsample_factor, 2)
-        self.assertAlmostEqual(config.filament_swap_relief.contour_simplify_tolerance_px, 0.45)
+        self.assertAlmostEqual(config.filament_swap_relief.contour_simplify_tolerance_px, 0.35)
         self.assertTrue(config.filament_swap_relief.contour_smoothing_enabled)
         self.assertEqual(config.filament_swap_relief.contour_smoothing_strength, 2)
         self.assertAlmostEqual(config.filament_swap_relief.background_confidence_threshold, 0.45)
@@ -76,6 +79,8 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertFalse(config.solid_base_enabled)
         self.assertEqual(config.max_sampled_pixels, 700000)
         self.assertFalse(hasattr(config, "export_generic_3mf"))
+        self.assertAlmostEqual(config.solid_base_thickness_mm, 2.0)
+        self.assertAlmostEqual(config.solid_base_color_band_height_mm, 0.8)
 
     def test_invalid_filament_relief_style_and_mesh_style_are_rejected(self) -> None:
         load_config_dict = __import__("spool_house_ai.config", fromlist=["_filament_swap_relief_config"])
@@ -257,11 +262,20 @@ class FilamentSwapReliefTests(unittest.TestCase):
             stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
             report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
             mesh = trimesh.load_mesh(stl_path, process=True)
-            lower_area = self._horizontal_face_area(mesh, 0.8)
-            upper_area = self._horizontal_face_area(mesh, 2.0)
+            base_area = self._horizontal_face_area(mesh, 2.0)
+            first_color_area = self._horizontal_face_area(mesh, 2.8)
+            second_color_area = self._horizontal_face_area(mesh, 3.6)
 
             self.assertTrue(metadata["solid_base_enabled"])
             self.assertTrue(metadata["color_plan"]["solid_base_enabled"])
+            self.assertEqual(metadata["solid_base_thickness_mm"], 2.0)
+            self.assertEqual(metadata["solid_base_color_band_height_mm"], 0.8)
+            self.assertEqual(metadata["color_plan"]["solid_base_plate"]["aligned_thickness_mm"], 2.0)
+            self.assertEqual(metadata["color_plan"]["solid_base_plate"]["layer_count"], 10)
+            self.assertEqual([color["layer_count"] for color in metadata["detected_colors"]], [4, 4])
+            self.assertEqual([color["change_before_layer"] for color in metadata["detected_colors"]], [11, 15])
+            self.assertEqual([color["previous_filament_last_layer"] for color in metadata["detected_colors"]], [10, 14])
+            self.assertEqual([color["assigned_height_mm"] for color in metadata["detected_colors"]], [2.8, 3.6])
             self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
             self.assertEqual(metadata["vector_geometry_method"], "quality_contours")
             self.assertTrue(report.watertight)
@@ -270,8 +284,9 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertAlmostEqual(report.bounding_box_mm[0], 112.0, delta=0.2)
             self.assertAlmostEqual(report.bounding_box_mm[1], 64.0, delta=0.2)
-            self.assertGreater(lower_area, upper_area)
-            self.assertGreater(upper_area, 0.0)
+            self.assertGreater(base_area, first_color_area)
+            self.assertGreater(first_color_area, second_color_area)
+            self.assertGreater(second_color_area, 0.0)
 
     def test_quality_contours_use_upsampled_curve_and_line_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -289,7 +304,6 @@ class FilamentSwapReliefTests(unittest.TestCase):
                 load_config(Path("config/config.yaml")).filament_swap_relief,
                 width_mm=120.0,
                 color_count=2,
-                max_sampled_pixels=30000,
                 min_region_area_px=1,
                 smooth_edges=False,
             )
@@ -302,6 +316,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(metadata["vector_contour_fallback_count"], 0)
             self.assertEqual(metadata["vector_contour_upsample_factor"], 2)
             self.assertEqual(metadata["vector_contour_effective_upsample_factors"], [2])
+            self.assertEqual(metadata["detail_quality"], "High detail")
             self.assertGreater(
                 metadata["vector_contour_straightened_segments"] + metadata["vector_contour_curve_fitted_segments"],
                 0,
@@ -310,6 +325,12 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(report.open_edge_count, 0)
             self.assertEqual(report.overused_edge_count, 0)
             self.assertEqual(report.non_manifold_edge_count, 0)
+
+    def test_high_detail_large_masks_keep_upsampled_contours(self) -> None:
+        config = load_config(Path("config/config.yaml")).filament_swap_relief
+        mask = np.ones((700, 1000), dtype=bool)
+
+        self.assertEqual(_effective_contour_upsample_factor(mask, config), 2)
 
     def test_stacked_shell_vector_repair_exports_valid_stl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -668,6 +689,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(status["generic_3mf_summary"]["generic_3mf_path"], str(paths.generic_3mf_path))
             self.assertEqual(status["filament_swap_summary"]["color_count_kept"], 3)
             self.assertEqual(status["filament_swap_summary"]["swap_plan_summary"]["total_printed_layers"], 10)
+            self.assertIn("Do not rescale", " ".join(status["filament_swap_summary"]["swap_plan_summary"]["shop_ready_checklist"]))
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_enabled"])
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_created"])
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_validation_passed"])
@@ -684,6 +706,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertIn("## Filament Swap Relief", summary)
             self.assertIn("## Filament Island Handling", summary)
             self.assertIn("## Filament Swap Plan", summary)
+            self.assertIn("Shop-ready checklist", summary)
             self.assertIn("## Generic 3MF Export", summary)
             self.assertIn("Manual filament-change instructions are stored separately", summary)
             self.assertIn("Change before layer", summary)
@@ -691,6 +714,9 @@ class FilamentSwapReliefTests(unittest.TestCase):
             text_plan = paths.filament_swap_plan_path.read_text(encoding="utf-8")
             self.assertIn("FILAMENT RELIEF MANUAL SWAP PLAN", text_plan)
             self.assertIn("Layers are one-based.", text_plan)
+            self.assertIn("Quick print checklist", text_plan)
+            self.assertIn("Do not rescale the STL or 3MF", text_plan)
+            self.assertIn("Set the slicer to first layer", text_plan)
             self.assertIn("CHANGE BEFORE LAYER 5", text_plan)
 
     def test_diagonal_height_contacts_are_repaired_before_stl_export(self) -> None:

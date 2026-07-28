@@ -53,6 +53,34 @@ class FilamentSwapLayerMathTests(unittest.TestCase):
         self.assertEqual([color["layer_count"] for color in plan["colors"]], [4, 2, 4])
         self.assertTrue(any("minimum finished thickness" in warning for warning in plan["warnings"]))
 
+    def test_solid_base_plate_uses_two_mm_base_and_point_eight_color_bands(self) -> None:
+        plan = calculate_filament_swap_plan(
+            _colors(),
+            base_height_mm=0.8,
+            layer_step_mm=0.4,
+            first_layer_height_mm=0.2,
+            layer_height_mm=0.2,
+            height_alignment_mode="snap_up",
+            height_alignment_tolerance_mm=0.001,
+            min_model_thickness_mm=2.0,
+            solid_base_enabled=True,
+            solid_base_thickness_mm=2.0,
+            solid_base_color_band_height_mm=0.8,
+            palette_order="light_to_dark",
+        )
+
+        self.assertEqual(plan["height_settings"]["requested_cumulative_boundaries_mm"], [0.0, 2.0, 2.8, 3.6, 4.4])
+        self.assertEqual(plan["height_settings"]["aligned_cumulative_boundaries_mm"], [0.0, 2.0, 2.8, 3.6, 4.4])
+        self.assertEqual(plan["solid_base_plate"]["layer_count"], 10)
+        self.assertEqual(plan["solid_base_plate"]["last_layer"], 10)
+        self.assertEqual([color["layer_count"] for color in plan["colors"]], [4, 4, 4])
+        self.assertEqual([color["first_layer_using_color"] for color in plan["colors"]], [11, 15, 19])
+        self.assertEqual([color["last_layer_using_color"] for color in plan["colors"]], [14, 18, 22])
+        self.assertEqual([color["change_before_layer"] for color in plan["colors"]], [11, 15, 19])
+        self.assertEqual([color["previous_filament_last_layer"] for color in plan["colors"]], [10, 14, 18])
+        self.assertEqual([color["assigned_height_mm"] for color in plan["colors"]], [2.8, 3.6, 4.4])
+        self.assertEqual(plan["total_printed_layers"], 22)
+
     def test_different_first_layer_height_does_not_use_simple_division(self) -> None:
         plan = _plan(base=0.8, step=0.4, first=0.28, normal=0.16, mode="snap_up")
 
