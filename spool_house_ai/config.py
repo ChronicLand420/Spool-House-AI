@@ -185,6 +185,7 @@ class FilamentSwapReliefConfig:
     solid_base_enabled: bool
     solid_base_thickness_mm: float
     solid_base_color_band_height_mm: float
+    export_orca_project_3mf: bool
     island_policy: str
     island_merge_max_distance_px: int
     island_merge_fallback: str
@@ -734,6 +735,7 @@ def _filament_swap_relief_config(
             value.get("solid_base_color_band_height_mm", 0.8),
             "filament_swap_relief.solid_base_color_band_height_mm",
         ),
+        export_orca_project_3mf=bool(value.get("export_orca_project_3mf", True)),
         island_policy=island_policy,
         island_merge_max_distance_px=_nonnegative_int(
             value.get("island_merge_max_distance_px", 8),

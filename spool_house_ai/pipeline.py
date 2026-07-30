@@ -202,6 +202,7 @@ class ImagePipeline:
                     color_plan_path=paths.color_plan_path,
                     filament_swap_plan_path=paths.filament_swap_plan_path,
                     generic_3mf_path=paths.generic_3mf_path,
+                    orca_project_3mf_path=paths.orca_project_3mf_path,
                     printability_preview_path=paths.printability_preview_path,
                 )
                 for warning in filament_swap_metadata.get("warnings") or []:
@@ -254,6 +255,8 @@ class ImagePipeline:
                 self.logger.info("Created filament swap plan: %s", paths.filament_swap_plan_path)
                 if filament_swap_metadata.get("generic_3mf_created"):
                     self.logger.info("Created generic 3MF: %s", paths.generic_3mf_path)
+                if filament_swap_metadata.get("orca_project_3mf_created"):
+                    self.logger.info("Created Orca project 3MF: %s", paths.orca_project_3mf_path)
             if preview_path.exists():
                 self.logger.info("Created preview: %s", preview_path)
             return stl_created
@@ -527,6 +530,7 @@ def _write_job_settings(path: Path, config: AppConfig) -> None:
         f"  filament_swap_palette_random_seed: {config.filament_swap_relief.palette_random_seed}",
         f"  filament_swap_merge_similar_colors: {str(config.filament_swap_relief.merge_similar_colors).lower()}",
         f"  filament_swap_solid_base_enabled: {str(config.filament_swap_relief.solid_base_enabled).lower()}",
+        f"  filament_swap_export_orca_project_3mf: {str(config.filament_swap_relief.export_orca_project_3mf).lower()}",
         f"  filament_swap_relief_style: {config.filament_swap_relief.relief_style}",
         f"  filament_swap_mesh_style: {config.filament_swap_relief.mesh_style}",
         f"  filament_swap_contour_simplify_tolerance_px: {config.filament_swap_relief.contour_simplify_tolerance_px}",
@@ -635,6 +639,11 @@ def _write_job_status(
         "review_svg_path": str(paths.review_svg_path) if svg_applicable else "",
         "stl_path": str(paths.stl_path),
         "generic_3mf_path": generic_3mf_summary.get("generic_3mf_path", "") if generic_3mf_summary.get("generic_3mf_created") else "",
+        "orca_project_3mf_path": (
+            (filament_swap_metadata or {}).get("orca_project_3mf_path", "")
+            if (filament_swap_metadata or {}).get("orca_project_3mf_created")
+            else ""
+        ),
         "mesh_report_path": str(paths.mesh_report_path),
         "job_status_path": str(paths.job_status_path),
         "job_summary_path": str(paths.job_summary_path),
@@ -679,6 +688,7 @@ def _write_job_status(
             "filament_swap_palette_random_seed": config.filament_swap_relief.palette_random_seed,
             "filament_swap_merge_similar_colors": config.filament_swap_relief.merge_similar_colors,
             "filament_swap_solid_base_enabled": config.filament_swap_relief.solid_base_enabled,
+            "filament_swap_export_orca_project_3mf": config.filament_swap_relief.export_orca_project_3mf,
             "filament_swap_relief_style": config.filament_swap_relief.relief_style,
             "filament_swap_mesh_style": config.filament_swap_relief.mesh_style,
             "filament_swap_contour_simplify_tolerance_px": config.filament_swap_relief.contour_simplify_tolerance_px,
@@ -772,6 +782,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Review SVG: `{status.get('review_svg_path', '')}`",
         f"- STL: `{status.get('stl_path', '')}`",
         f"- Generic 3MF: `{status.get('generic_3mf_path', '')}`",
+        f"- Orca project 3MF: `{status.get('orca_project_3mf_path', '')}`",
         f"- Preview: `{status.get('preview_path', '')}`",
         f"- Print-safe cleanup preview: `{status.get('printability_preview_path', '')}`",
         f"- Mesh report: `{status.get('mesh_report_path', '')}`",
@@ -799,6 +810,15 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         f"- Bounds mm: `{generic_3mf.get('generic_3mf_bounds', '')}`",
         f"- Bounds match STL mesh: `{generic_3mf.get('bounds_match', False)}`",
         f"- Notice: {generic_3mf.get('generic_export_notice', '')}",
+        "",
+        "## Orca Project 3MF Export",
+        f"- Enabled: `{filament_swap.get('orca_project_3mf_enabled', False)}`",
+        f"- Created: `{filament_swap.get('orca_project_3mf_created', False)}`",
+        f"- Path: `{filament_swap.get('orca_project_3mf_path', '')}`",
+        f"- Validation passed: `{filament_swap.get('orca_project_3mf_validation_passed', False)}`",
+        f"- Tool changes: `{filament_swap.get('orca_project_tool_change_count', 0)}`",
+        f"- Orca marker top Z mm: `{filament_swap.get('orca_project_tool_change_z_mm', [])}`",
+        f"- Notice: {filament_swap.get('orca_project_notice', '')}",
         "",
         "## Artwork Cleanup",
         f"- Isolated islands: `{artifact.get('isolated_island_count', 0)}`",

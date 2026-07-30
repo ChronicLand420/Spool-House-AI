@@ -14,6 +14,7 @@ from spool_house_ai.processing.filament_layers import calculate_filament_swap_pl
 from spool_house_ai.processing.generic_3mf import GENERIC_3MF_NOTICE
 from spool_house_ai.processing.geometry import extract_vector_contours, smooth_contour_points
 from spool_house_ai.processing.islands import apply_island_policy
+from spool_house_ai.processing.orca_3mf import disabled_orca_project_metadata, export_orca_project_3mf
 from spool_house_ai.processing.printability import enforce_printable_height_map
 from spool_house_ai.processing.stl import StlCreationResult, export_generic_3mf_for_stl_mesh
 
@@ -45,6 +46,7 @@ def create_filament_swap_relief_stl(
     color_plan_path: Path | None = None,
     filament_swap_plan_path: Path | None = None,
     generic_3mf_path: Path | None = None,
+    orca_project_3mf_path: Path | None = None,
     printability_preview_path: Path | None = None,
 ) -> tuple[StlCreationResult, dict[str, Any]]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +140,25 @@ def create_filament_swap_relief_stl(
     if generic_3mf_metadata["generic_3mf_enabled"] and not generic_3mf_metadata["generic_3mf_created"]:
         warning = "Generic 3MF export failed: " + "; ".join(generic_3mf_metadata["generic_3mf_validation_errors"])
         warnings.append(warning)
+    if config.export_orca_project_3mf:
+        orca_project_3mf_metadata = _export_orca_project_3mf_metadata(
+            mesh,
+            orca_project_3mf_path,
+            title=image_path.stem,
+            color_plan=color_plan,
+        )
+    else:
+        if orca_project_3mf_path is not None:
+            orca_project_3mf_path.unlink(missing_ok=True)
+        orca_project_3mf_metadata = disabled_orca_project_metadata(orca_project_3mf_path)
+    if (
+        orca_project_3mf_metadata["orca_project_3mf_enabled"]
+        and not orca_project_3mf_metadata["orca_project_3mf_created"]
+    ):
+        warning = "Orca project 3MF export failed: " + "; ".join(
+            orca_project_3mf_metadata["orca_project_3mf_validation_errors"]
+        )
+        warnings.append(warning)
 
     ignored_color = _rgb_tuple(centers[ignored_label]) if ignored_label is not None else None
     metadata: dict[str, Any] = {
@@ -167,6 +188,7 @@ def create_filament_swap_relief_stl(
         "solid_base_enabled": bool(config.solid_base_enabled),
         "solid_base_thickness_mm": round(float(config.solid_base_thickness_mm), 4),
         "solid_base_color_band_height_mm": round(float(config.solid_base_color_band_height_mm), 4),
+        "export_orca_project_3mf": bool(config.export_orca_project_3mf),
         "similar_color_merge_count": color_merge_metadata["merge_count"],
         "similar_color_merges": color_merge_metadata["merges"],
         "clustering_seed": int(config.palette_random_seed),
@@ -222,6 +244,7 @@ def create_filament_swap_relief_stl(
     metadata.update(load_metadata)
     metadata.update(bounds_metadata)
     metadata.update(generic_3mf_metadata)
+    metadata.update(orca_project_3mf_metadata)
 
     if load_metadata["source_downscaled"]:
         warnings.append(
@@ -320,6 +343,23 @@ def _export_generic_3mf_metadata(
         output_path,
         title=title,
         description=f"Filament Swap Relief generic 3MF export. {GENERIC_3MF_NOTICE}",
+    )
+
+
+def _export_orca_project_3mf_metadata(
+    mesh: trimesh.Trimesh,
+    output_path: Path | None,
+    *,
+    title: str,
+    color_plan: dict[str, Any],
+) -> dict[str, Any]:
+    if output_path is None:
+        return disabled_orca_project_metadata(output_path)
+    return export_orca_project_3mf(
+        mesh,
+        output_path,
+        title=title,
+        color_plan=color_plan,
     )
 
 

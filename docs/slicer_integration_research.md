@@ -2,13 +2,13 @@
 
 Date: 2026-07-13
 
-Scope: research only. This document records generic 3MF, OrcaSlicer, and Bambu Studio automation findings for future Spool House Studio phases. It does not approve Orca/Bambu project export, slicer marker injection, G-code generation, printer-profile generation, or automatic slicing.
+Scope: research plus implementation notes. This document records generic 3MF, OrcaSlicer, and Bambu Studio automation findings for Spool House Studio. OrcaSlicer project export is now implemented as an optional Filament Swap Relief handoff. Bambu project export, G-code generation, printer-profile generation, automatic slicing, and printer control remain out of scope.
 
 ## Summary Recommendation
 
-Keep generic 3MF as the canonical slicer handoff format for now. It is standards-based, small, and preserves Spool House Studio geometry without vendor metadata. Future OrcaSlicer or Bambu Studio project export should be optional and built on top of the generic 3MF exporter, not a replacement for it.
+Keep STL and generic 3MF as the canonical safe model handoff formats. Generic 3MF is standards-based, small, and preserves Spool House Studio geometry without vendor metadata. The optional OrcaSlicer project export for Filament Swap Relief is built beside these files, not as a replacement for them.
 
-The first safe UI improvement is now `Open in Slicer`:
+The first safe UI improvement is direct slicer file handoff:
 
 - prefer the validated generic 3MF
 - fall back to STL when the 3MF is missing or failed validation
@@ -16,9 +16,9 @@ The first safe UI improvement is now `Open in Slicer`:
 - launch slicers with the selected model as a single positional argument
 - do not slice, export G-code, modify profiles, or generate slicer-specific project files
 
-Do not generate slicer-specific project files until a separate prototype validates the exact project structure against controlled Orca/Bambu reference files.
+Do not generate Bambu-specific project files or sliced exports until separate prototypes validate those structures. The current Orca project export is limited to geometry, filament slots, and manual tool-change markers from the Filament Relief color plan.
 
-## Open in Slicer Implementation Findings
+## Slicer File Handoff Implementation Findings
 
 Verified locally / implemented:
 
@@ -49,14 +49,13 @@ Requires manual confirmation:
 - Whether the user's Windows file association opens the preferred slicer for `.3mf` or `.stl`.
 - Whether a slicer UI shows a repair warning after launch; SHS does not automate UI inspection.
 
-Unsupported in this phase:
+Still unsupported:
 
 - automatic slicing
 - G-code export
 - printer/process/filament profile selection
 - AMS slot selection
-- manual filament-change marker injection
-- Orca/Bambu project 3MF generation
+- Bambu project 3MF generation
 - GUI-clicking automation
 
 ## Sources
@@ -292,16 +291,21 @@ Verified:
 - Orca discussion states `--slice` plus `--export-3mf` creates `.gcode.3mf` containing G-code.
 - Bambu CLI accepts `--load-custom-gcodes`, but this is slicing/G-code-oriented, not verified as an unsliced project marker API.
 
+Verified from local Orca-saved project files:
+
+- Unsliced Orca/Bambu-style project 3MFs can store manual tool-change markers in `Metadata/custom_gcode_per_layer.xml`.
+- Spool House Studio's Orca project export writes only `tool_change` marker rows derived from `color_plan.json`.
+- The exporter does not write sliced toolpath files, `.gcode`, `.gco`, `.bgcode`, or thumbnail files.
+
 Unknown:
 
-- Whether unsliced Orca/Bambu project 3MFs can safely contain manual color-change markers without G-code generation.
-- Whether a layer schedule can be represented as project metadata that the slicer UI will honor before slicing.
-- Whether such marker metadata is stable across Orca/Bambu versions.
+- Whether the marker metadata is stable across all future Orca/Bambu versions.
+- Whether Bambu Studio will preserve these markers exactly enough to justify Bambu-specific export.
 
 Recommendation:
 
 - Continue exporting human-readable `filament_swap_plan.txt` and machine-readable `color_plan.json`.
-- Do not inject pause/color-change markers into project files until an Orca-only prototype proves the exact fields.
+- Keep Orca project export optional and Filament Relief-only until more real-world Orca-open tests pass.
 - Treat Bambu project support as a later phase after Orca is stable.
 
 ## Plugin / API Support
@@ -331,26 +335,25 @@ Bambu Studio:
 | Arrange/orient | Verified from references | Verified locally | Use cautiously; it can change orientation/placement. |
 | Export project 3MF | Verified from references | Verified locally | With slicing it may become Gcode.3MF. |
 | Headless slicing | Likely CLI path | CLI path exists | Startup/runtime dependencies still need machine tests. |
-| Manual swap markers without G-code | Unknown | Unknown | Do not implement yet. |
+| Manual swap markers without G-code | Implemented for Filament Relief project export | Unknown | Orca path uses `Metadata/custom_gcode_per_layer.xml` tool-change rows only. |
 | Plugin/API model mutation | Not verified; host API read-only | Not verified | No SHS integration yet. |
 
 ## Open Button Architecture
 
 Implemented architecture:
 
-1. Main button: `Open in Slicer`.
+1. Direct artifact buttons:
+   - `Open STL`
+   - `Open 3MF`
 2. File selection:
-   - validated generic 3MF first
-   - STL fallback when 3MF is unavailable or failed validation
-   - optional preference to prefer STL while keeping 3MF available
+   - `Open 3MF` uses only a validated generic 3MF
+   - `Open STL` uses the generated STL
+   - Orca project 3MF files are available in the job `3mf/` folder for Filament Swap Relief
 3. Slicer selection:
    - System default
    - OrcaSlicer
    - Bambu Studio
-4. Direct artifact buttons:
-   - `Open STL`
-   - `Open 3MF`
-   - output folder/root actions
+4. Folder/root actions remain available for output review.
 5. Configured executable paths:
    - OrcaSlicer executable path
    - Bambu Studio executable path
@@ -368,17 +371,13 @@ Avoid:
 
 ## Future Phases
 
-1. Add `Open 3MF` / `Open in default slicer`.
-2. Orca reference project research:
-   - Generate controlled Orca projects from one SHS generic 3MF.
-   - Inspect project metadata and transforms.
-   - Create `docs/orca_3mf_format_research.md`.
-3. Orca project prototype:
-   - Standalone script, no GUI integration.
-   - Validate archive structure and open in Orca manually.
-4. Orca project export integration only after prototype passes.
-5. Bambu Studio investigation after Orca support is stable.
+1. Harden Orca project export:
+   - Open more generated `_orca_project.3mf` files in Orca manually.
+   - Confirm color slots, marker layers, orientation, and dimensions across several artwork styles.
+   - Keep validator tests strict about no sliced G-code.
+2. Create `docs/orca_3mf_format_research.md` if project-format work expands beyond the current minimal exporter.
+3. Bambu Studio investigation after Orca support is stable.
 
 ## Release Decision
 
-For the next release candidate, ship generic 3MF for every successful STL and keep slicer automation limited to safe file handoff. `Open in Slicer` may launch System default, OrcaSlicer, or Bambu Studio with the chosen generic 3MF/STL as a file argument only. Continue avoiding fragile vendor-specific project generation, G-code export, and marker injection until dedicated prototypes prove those formats safely.
+For the next release candidate, ship STL and generic 3MF for every successful STL job. For Filament Swap Relief, also ship the optional Orca project 3MF once manual Orca-open checks confirm the file opens cleanly with expected color/tool-change markers. Continue avoiding G-code export, automatic slicing, printer control, and Bambu-specific project generation.

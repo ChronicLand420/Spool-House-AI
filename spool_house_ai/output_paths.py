@@ -27,6 +27,7 @@ class JobOutputPaths:
     review_svg_path: Path
     stl_path: Path
     generic_3mf_path: Path
+    orca_project_3mf_path: Path
     mesh_report_path: Path
     job_status_path: Path
     job_summary_path: Path
@@ -88,6 +89,7 @@ def build_job_output_paths_for_stem(output_root: Path, stem: str, source_filenam
         review_svg_path=svg_dir / f"{stem}_review.svg",
         stl_path=stl_dir / f"{stem}.stl",
         generic_3mf_path=three_mf_dir / f"{stem}.3mf",
+        orca_project_3mf_path=three_mf_dir / f"{stem}_orca_project.3mf",
         mesh_report_path=reports_dir / "mesh_report.json",
         job_status_path=reports_dir / "job_status.json",
         job_summary_path=reports_dir / "job_summary.md",

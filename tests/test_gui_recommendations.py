@@ -73,6 +73,7 @@ class GuiRecommendationTests(unittest.TestCase):
 
             self.assertTrue(hasattr(window, "filament_detail_quality"))
             self.assertTrue(hasattr(window, "filament_solid_base"))
+            self.assertTrue(hasattr(window, "filament_orca_project_3mf"))
             self.assertEqual(window._combo_value(window.filament_detail_quality), "700000")
 
             ultra_index = window.filament_detail_quality.findData("1600000")
@@ -84,6 +85,7 @@ class GuiRecommendationTests(unittest.TestCase):
             config = window._config_from_controls()
             self.assertEqual(config.filament_swap_relief.max_sampled_pixels, 1600000)
             self.assertTrue(config.filament_swap_relief.solid_base_enabled)
+            self.assertTrue(config.filament_swap_relief.export_orca_project_3mf)
             self.assertEqual(window.filament_plan_table.item(0, 0).text(), "Base")
             self.assertEqual(window.filament_plan_table.item(0, 5).text(), "1")
             self.assertEqual(window.filament_plan_table.item(0, 6).text(), "10")

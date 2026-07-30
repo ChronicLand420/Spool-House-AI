@@ -151,6 +151,7 @@ filament_swap_relief:
   solid_base_enabled: false
   solid_base_thickness_mm: 2.0
   solid_base_color_band_height_mm: 0.8
+  export_orca_project_3mf: true
   island_policy: remove_below_threshold
   island_merge_max_distance_px: 8
   island_merge_fallback: remove

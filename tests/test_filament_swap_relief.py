@@ -45,6 +45,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertFalse(config.filament_swap_relief.solid_base_enabled)
         self.assertAlmostEqual(config.filament_swap_relief.solid_base_thickness_mm, 2.0)
         self.assertAlmostEqual(config.filament_swap_relief.solid_base_color_band_height_mm, 0.8)
+        self.assertTrue(config.filament_swap_relief.export_orca_project_3mf)
         self.assertEqual(config.filament_swap_relief.relief_style, "stacked_blocks")
         self.assertEqual(config.filament_swap_relief.mesh_style, "vector_contours")
         self.assertEqual(config.filament_swap_relief.contour_upsample_factor, 2)
@@ -79,6 +80,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertFalse(config.solid_base_enabled)
         self.assertEqual(config.max_sampled_pixels, 700000)
         self.assertFalse(hasattr(config, "export_generic_3mf"))
+        self.assertTrue(config.export_orca_project_3mf)
         self.assertAlmostEqual(config.solid_base_thickness_mm, 2.0)
         self.assertAlmostEqual(config.solid_base_color_band_height_mm, 0.8)
 
@@ -656,6 +658,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertTrue(paths.source_copy_path.exists())
             self.assertTrue(paths.stl_path.exists())
             self.assertTrue(paths.generic_3mf_path.exists())
+            self.assertTrue(paths.orca_project_3mf_path.exists())
             self.assertTrue(paths.preview_path.exists())
             self.assertTrue(paths.cleaned_png_path.exists())
             self.assertTrue(paths.silhouette_png_path.exists())
@@ -682,6 +685,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(status["color_plan_path"], str(paths.color_plan_path))
             self.assertEqual(status["filament_swap_plan_path"], str(paths.filament_swap_plan_path))
             self.assertEqual(status["generic_3mf_path"], str(paths.generic_3mf_path))
+            self.assertEqual(status["orca_project_3mf_path"], str(paths.orca_project_3mf_path))
             self.assertEqual(status["three_mf_folder_path"], str(paths.three_mf_dir))
             self.assertEqual(status["dimensions"]["generic_3mf_export"], "automatic")
             self.assertTrue(status["generic_3mf_summary"]["generic_3mf_created"])
@@ -696,7 +700,13 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(status["filament_swap_summary"]["generic_3mf_path"], str(paths.generic_3mf_path))
             self.assertEqual(status["filament_swap_summary"]["generic_3mf_units"], "millimeter")
             self.assertTrue(status["filament_swap_summary"]["bounds_match"])
+            self.assertTrue(status["filament_swap_summary"]["orca_project_3mf_enabled"])
+            self.assertTrue(status["filament_swap_summary"]["orca_project_3mf_created"])
+            self.assertTrue(status["filament_swap_summary"]["orca_project_3mf_validation_passed"])
+            self.assertEqual(status["filament_swap_summary"]["orca_project_3mf_path"], str(paths.orca_project_3mf_path))
+            self.assertGreaterEqual(status["filament_swap_summary"]["orca_project_tool_change_count"], 1)
             self.assertIn("generic_export_notice", status["filament_swap_summary"])
+            self.assertIn("orca_project_notice", status["filament_swap_summary"])
             self.assertIn("island_summary", status["filament_swap_summary"])
             self.assertNotIn("component_actions", status["filament_swap_summary"])
             self.assertNotIn("color_plan", status["filament_swap_summary"])
@@ -708,7 +718,9 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertIn("## Filament Swap Plan", summary)
             self.assertIn("Shop-ready checklist", summary)
             self.assertIn("## Generic 3MF Export", summary)
+            self.assertIn("## Orca Project 3MF Export", summary)
             self.assertIn("Manual filament-change instructions are stored separately", summary)
+            self.assertIn("OrcaSlicer project", summary)
             self.assertIn("Change before layer", summary)
             self.assertIn("not_applicable", summary)
             text_plan = paths.filament_swap_plan_path.read_text(encoding="utf-8")
@@ -785,12 +797,56 @@ class FilamentSwapReliefTests(unittest.TestCase):
             paths = build_job_output_paths(output_dir, input_path)
             self.assertTrue(paths.stl_path.exists())
             self.assertTrue(paths.generic_3mf_path.exists())
+            self.assertTrue(paths.orca_project_3mf_path.exists())
             status = json.loads(paths.job_status_path.read_text(encoding="utf-8"))
             self.assertEqual(status["generic_3mf_path"], str(paths.generic_3mf_path))
+            self.assertEqual(status["orca_project_3mf_path"], str(paths.orca_project_3mf_path))
             self.assertEqual(status["dimensions"]["generic_3mf_export"], "automatic")
             self.assertTrue(status["generic_3mf_summary"]["generic_3mf_enabled"])
             self.assertTrue(status["generic_3mf_summary"]["generic_3mf_created"])
             self.assertTrue(status["generic_3mf_summary"]["generic_3mf_validation_passed"])
+            self.assertTrue(status["filament_swap_summary"]["orca_project_3mf_created"])
+
+    def test_pipeline_can_disable_orca_project_3mf_for_filament_relief(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "filament_swap_no_orca.png"
+            output_dir = temp_path / "output"
+            log_dir = temp_path / "logs"
+            output_dir.mkdir()
+            log_dir.mkdir()
+            self._save_three_color_test_image(input_path)
+
+            config = load_config(Path("config/config.yaml"))
+            config = replace(
+                config,
+                input_dir=temp_path,
+                output_dir=output_dir,
+                log_dir=log_dir,
+                pipeline=replace(config.pipeline, product_mode="filament_swap_relief"),
+                stl=replace(config.stl, product_mode="filament_swap_relief"),
+                filament_swap_relief=replace(
+                    config.filament_swap_relief,
+                    width_mm=48.0,
+                    max_sampled_pixels=5000,
+                    min_region_area_px=3,
+                    export_orca_project_3mf=False,
+                ),
+            )
+            logger = logging.getLogger("spool_house_ai.tests.filament_swap.no_orca_project")
+            logger.handlers.clear()
+            logger.addHandler(logging.NullHandler())
+
+            self.assertTrue(ImagePipeline(config, logger).process(input_path))
+
+            paths = build_job_output_paths(output_dir, input_path)
+            self.assertTrue(paths.stl_path.exists())
+            self.assertTrue(paths.generic_3mf_path.exists())
+            self.assertFalse(paths.orca_project_3mf_path.exists())
+            status = json.loads(paths.job_status_path.read_text(encoding="utf-8"))
+            self.assertEqual(status["orca_project_3mf_path"], "")
+            self.assertFalse(status["filament_swap_summary"]["orca_project_3mf_enabled"])
+            self.assertFalse(status["filament_swap_summary"]["orca_project_3mf_created"])
 
     @staticmethod
     def _save_three_color_test_image(path: Path) -> None:

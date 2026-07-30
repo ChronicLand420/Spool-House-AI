@@ -1213,6 +1213,12 @@ class MainWindow(QMainWindow):
             "Fill ignored/background pixels with the first filament height so color details sit on a solid plate."
         )
         self.filament_solid_base.setChecked(self.config.filament_swap_relief.solid_base_enabled)
+        self.filament_orca_project_3mf = QCheckBox("Export Orca project 3MF")
+        self.filament_orca_project_3mf.setToolTip(
+            "Create an OrcaSlicer project file with the same STL geometry plus color-change layer markers. "
+            "This does not slice, export G-code, or send a print."
+        )
+        self.filament_orca_project_3mf.setChecked(self.config.filament_swap_relief.export_orca_project_3mf)
         self.printer_profile_name = QLineEdit(self.config.printer_profile.profile_name)
         self.printer_nozzle_diameter = self._double_spin(0.1, 2.0, self.config.printer_profile.nozzle_diameter_mm)
         self.printer_line_width = self._double_spin(0.1, 3.0, self.config.printer_profile.line_width_mm)
@@ -1438,6 +1444,7 @@ class MainWindow(QMainWindow):
         filament_group.layout().addRow(self.filament_auto_background_ignore)
         filament_group.layout().addRow(self.filament_merge_similar_colors)
         filament_group.layout().addRow(self.filament_solid_base)
+        filament_group.layout().addRow(self.filament_orca_project_3mf)
         advanced_section.body_layout.addWidget(filament_group)
         self.filament_plan_group = QGroupBox("Filament Color Plan")
         self.filament_plan_group.setObjectName("settingsGroup")
@@ -1655,6 +1662,7 @@ class MainWindow(QMainWindow):
             getattr(self, "filament_auto_background_ignore", None),
             getattr(self, "filament_merge_similar_colors", None),
             getattr(self, "filament_solid_base", None),
+            getattr(self, "filament_orca_project_3mf", None),
         ]
         for control in contour_controls:
             if control is not None:
@@ -2094,6 +2102,7 @@ class MainWindow(QMainWindow):
             auto_background_ignore=self.filament_auto_background_ignore.isChecked(),
             merge_similar_colors=self.filament_merge_similar_colors.isChecked(),
             solid_base_enabled=self.filament_solid_base.isChecked(),
+            export_orca_project_3mf=self.filament_orca_project_3mf.isChecked(),
             min_region_area_px=self.filament_min_region_area.value(),
             palette_color_space=self._combo_value(self.filament_palette_color_space),
             island_policy=self._combo_value(self.filament_island_policy),

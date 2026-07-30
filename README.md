@@ -293,7 +293,9 @@ Filament Swap Relief has its own detail-quality, palette, shade-merge, and islan
 
 Island handling cannot recover details already lost during downsampling, smoothing, palette clustering, or background removal. The reports distinguish those earlier steps from island actions. Filament jobs write island review previews such as `_filament_islands_detected.png`, `_filament_islands_actions.png`, and action-specific preserved/removed/merged/connected previews when those actions occur. Filament jobs also write `reports/color_plan.json` and `reports/filament_swap_plan.txt`, which contain the layer-aware manual swap plan used by the STL and generic 3MF geometry.
 
-Every successful STL job also writes `3mf/<stem>.3mf` as a minimal standards-compliant generic 3MF model. This 3MF keeps the same size, orientation, and geometry as the STL, but it is not an OrcaSlicer or Bambu Studio project and does not embed filament-change markers, printer profiles, process profiles, or G-code. For Filament Swap Relief, use the separate `reports/filament_swap_plan.txt` for manual filament-change instructions.
+Every successful STL job also writes `3mf/<stem>.3mf` as a minimal standards-compliant generic 3MF model. This 3MF keeps the same size, orientation, and geometry as the STL, but it is not an OrcaSlicer or Bambu Studio project and does not embed filament-change markers, printer profiles, process profiles, or G-code.
+
+Filament Swap Relief can also write an OrcaSlicer project handoff as `3mf/<stem>_orca_project.3mf`. That project file uses the same printable mesh but adds Orca-readable filament slots and manual tool-change markers from the generated color plan. It is still not sliced output: Spool House Studio does not export G-code, send prints, or modify Orca profiles. The normal STL, generic 3MF, `reports/color_plan.json`, and `reports/filament_swap_plan.txt` are still created separately.
 
 ## Detail Modes
 
@@ -348,7 +350,7 @@ For lithophane jobs, the same job folder structure is used, but SVG files are no
 
 Lithophane jobs also write `previews/<stem>_lithophane_processed.png`, which shows the grayscale image after any crispness preprocessing and before thickness mapping. `job_status.json` and `job_summary.md` record the Lithophane preprocessing settings; `mesh_report.json` remains focused only on mesh health.
 
-For Filament Swap Relief jobs, SVG files are also not created in this first version. Instead, previews include color-group and height-map images, `stl/<stem>.stl` contains the printable STL, `3mf/<stem>.3mf` contains the matching generic 3MF model, and `reports/filament_swap_report.json`, `reports/color_plan.json`, `reports/filament_swap_plan.txt`, and `job_summary.md` include the detected color order, aligned layer heights, and manual swap instructions. The generic 3MF is model geometry only; filament-change instructions remain separate.
+For Filament Swap Relief jobs, SVG files are also not created in this first version. Instead, previews include color-group and height-map images, `stl/<stem>.stl` contains the printable STL, `3mf/<stem>.3mf` contains the matching generic 3MF model, optional `3mf/<stem>_orca_project.3mf` contains OrcaSlicer project markers, and `reports/filament_swap_report.json`, `reports/color_plan.json`, `reports/filament_swap_plan.txt`, and `job_summary.md` include the detected color order, aligned layer heights, and manual swap instructions. The generic 3MF is model geometry only; filament-change instructions remain separate.
 
 The default output root is `output/`. In the GUI, use `Settings` -> `Output Folder` to choose a different root folder. New jobs still use the same per-image pattern, `<selected output root>/<input stem>/`, and then place files into the `source/`, `svg/`, `stl/`, `3mf/`, `previews/`, and `reports/` subfolders. CLI runs continue to use `config/config.yaml` unless you change that config directly.
 
@@ -444,6 +446,7 @@ filament_swap_relief:
   solid_base_enabled: false
   solid_base_thickness_mm: 2.0
   solid_base_color_band_height_mm: 0.8
+  export_orca_project_3mf: true
   island_policy: remove_below_threshold
   island_merge_max_distance_px: 8
   island_merge_fallback: remove
