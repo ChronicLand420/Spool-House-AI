@@ -313,6 +313,7 @@ class CollapsibleSection(QFrame):
 
 class SettingsDialog(QDialog):
     preferences_changed = Signal(object)
+    status_log_requested = Signal()
 
     def __init__(self, preferences: UiPreferences, version: str, output_dir: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -363,7 +364,6 @@ class SettingsDialog(QDialog):
         appearance_form.addRow("Accent color", self.accent_combo)
         appearance_form.addRow("UI density", self.density_combo)
         appearance_form.addRow("Preview size", self.preview_combo)
-        appearance_form.addRow("Startup log", self.log_combo)
         scroll_layout.addWidget(appearance)
 
         self.open_output_after = QCheckBox("Open output folder after generation")
@@ -494,6 +494,21 @@ class SettingsDialog(QDialog):
         about_layout.addWidget(support_label)
         about_layout.addWidget(support_hint)
         about_layout.addLayout(support_row)
+        diagnostics_label = QLabel("Diagnostics")
+        diagnostics_label.setObjectName("supportTitle")
+        diagnostics_hint = QLabel("Open the status log when a job needs review or troubleshooting.")
+        diagnostics_hint.setObjectName("mutedText")
+        diagnostics_hint.setWordWrap(True)
+        diagnostics_row = QHBoxLayout()
+        self.open_status_log_button = QPushButton("Open Status Log")
+        self.open_status_log_button.setObjectName("secondaryButton")
+        self.open_status_log_button.setToolTip("Open recent status messages and processing log details.")
+        diagnostics_row.addWidget(self.open_status_log_button)
+        diagnostics_row.addStretch(1)
+        about_layout.addSpacing(6)
+        about_layout.addWidget(diagnostics_label)
+        about_layout.addWidget(diagnostics_hint)
+        about_layout.addLayout(diagnostics_row)
         scroll_layout.addWidget(about)
         scroll_layout.addStretch(1)
         layout.addWidget(self.settings_scroll, 1)
@@ -510,7 +525,7 @@ class SettingsDialog(QDialog):
 
         self.reset_button.clicked.connect(self.reset_preferences)
         self.close_button.clicked.connect(self.accept)
-        for combo in [self.theme_combo, self.accent_combo, self.density_combo, self.preview_combo, self.log_combo]:
+        for combo in [self.theme_combo, self.accent_combo, self.density_combo, self.preview_combo]:
             combo.currentIndexChanged.connect(self._emit_changed)
         self.preferred_slicer_combo.currentIndexChanged.connect(self._emit_changed)
         for checkbox in [self.open_output_after, self.show_summary_after, self.use_last_preset]:
@@ -524,6 +539,7 @@ class SettingsDialog(QDialog):
         self.choose_orca_button.clicked.connect(lambda: self.choose_slicer_executable("orca"))
         self.choose_bambu_button.clicked.connect(lambda: self.choose_slicer_executable("bambu"))
         self.detect_slicers_button.clicked.connect(self.detect_slicers)
+        self.open_status_log_button.clicked.connect(self.status_log_requested.emit)
 
         self.set_preferences(preferences)
         self._apply_screen_safe_geometry()
@@ -753,6 +769,8 @@ class MainWindow(QMainWindow):
         self.current_stem = ""
         self.rooms: dict[str, RoomCard] = {}
         self.settings_dialog: SettingsDialog | None = None
+        self.status_log_dialog: QDialog | None = None
+        self.status_log_view: QTextEdit | None = None
         self._ui_ready = False
         self.log_expanded = False
         self.pending_jobs: list[Path] = []
@@ -809,7 +827,7 @@ class MainWindow(QMainWindow):
         creator_credit = QLabel("Built by ChronicLand420")
         creator_credit.setObjectName("creatorCredit")
         brand_layout.addWidget(creator_credit)
-        tagline = QLabel("Turn artwork into reviewable SVG, STL, and product-ready output packages.")
+        tagline = QLabel("Turn artwork into print-ready STL, 3MF, and Orca project packages.")
         tagline.setObjectName("workflowTagline")
         tagline.setWordWrap(True)
         brand_layout.addWidget(tagline)
@@ -832,46 +850,23 @@ class MainWindow(QMainWindow):
 
         main_splitter = QSplitter(Qt.Horizontal)
         self.main_splitter = main_splitter
-        main_splitter.addWidget(self._left_panel())
         main_splitter.addWidget(self._bunker_panel())
         main_splitter.addWidget(self._settings_panel())
         main_splitter.setChildrenCollapsible(False)
-        main_splitter.setSizes([330, 700, 430])
+        main_splitter.setSizes([940, 420])
 
-        log_panel = QWidget()
-        self.log_panel = log_panel
-        log_layout = QVBoxLayout(log_panel)
-        log_layout.setContentsMargins(0, 0, 0, 0)
-        log_layout.setSpacing(6)
-        log_header = QHBoxLayout()
-        log_title = QLabel("Status Log")
-        log_title.setObjectName("sectionTitle")
         self.log_summary = QLabel("Ready")
         self.log_summary.setObjectName("statusSummary")
         self.log_summary.setWordWrap(False)
-        self.log_toggle_button = QPushButton("Show Log")
-        self.log_toggle_button.setObjectName("secondaryButton")
-        self.log_toggle_button.setFixedWidth(96)
-        self.log_toggle_button.clicked.connect(self.toggle_log)
-        log_header.addWidget(log_title)
-        log_header.addWidget(self.log_summary, 1)
-        log_header.addWidget(self.log_toggle_button)
-        log_layout.addLayout(log_header)
+        self.log_summary.hide()
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
-        self.logs.setMinimumHeight(96)
-        self.logs.setMaximumHeight(190)
-        log_layout.addWidget(self.logs)
-
-        self.vertical_splitter = QSplitter(Qt.Vertical)
-        self.vertical_splitter.addWidget(main_splitter)
-        self.vertical_splitter.addWidget(log_panel)
-        self.vertical_splitter.setChildrenCollapsible(False)
-        root.addWidget(self.vertical_splitter, 1)
+        self.logs.hide()
+        root.addWidget(main_splitter, 1)
         self.setCentralWidget(central)
         self._apply_style()
         self._apply_preview_size()
-        self.set_log_expanded(self.ui_preferences.startup_log_behavior == "expanded")
+        self.set_log_expanded(False)
 
     def _left_panel(self) -> QWidget:
         scroll = QScrollArea()
@@ -886,12 +881,23 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(9)
+        layout.addWidget(self._artwork_queue_card())
+        layout.addStretch(1)
+        scroll.setWidget(panel)
+        return scroll
+
+    def _artwork_queue_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("quickActionCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(9)
         add_button = QPushButton("Add Image")
         add_button.setObjectName("secondaryButton")
         add_button.clicked.connect(self.add_image)
         self.queue = DropQueue()
         self.queue.files_added.connect(self.add_files)
-        self.queue.currentItemChanged.connect(lambda *_args: self.refresh_artwork_recommendation())
+        self.queue.currentItemChanged.connect(self._queue_selection_changed)
         self.queue.setMinimumHeight(110)
         self.generate_button = QPushButton("Generate")
         self.generate_button.setObjectName("primaryButton")
@@ -941,7 +947,7 @@ class MainWindow(QMainWindow):
         self.copy_stl_button.clicked.connect(lambda: self.copy_named_output(".stl"))
         self.copy_mesh_report_button.clicked.connect(lambda: self.copy_output_path("mesh_report.json"))
         self.copy_job_status_button.clicked.connect(lambda: self.copy_output_path("job_status.json"))
-        queue_title = QLabel("1. Add Artwork")
+        queue_title = QLabel("Artwork Queue")
         queue_title.setObjectName("sectionTitle")
         layout.addWidget(queue_title)
         queue_note = QLabel("Drop PNG/JPG artwork here, then generate one image or the full queue.")
@@ -950,31 +956,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(queue_note)
         layout.addWidget(add_button)
         layout.addWidget(self.queue, 1)
-        generate_row = QHBoxLayout()
-        generate_row.addWidget(self.generate_button)
-        generate_row.addWidget(self.generate_all_button)
-        layout.addLayout(generate_row)
-        output_title = QLabel("Output Vault")
-        output_title.setObjectName("sectionTitle")
-        layout.addWidget(output_title)
-        output_grid = QGridLayout()
-        output_grid.setHorizontalSpacing(8)
-        output_grid.setVerticalSpacing(8)
-        output_grid.addWidget(self.open_output_root_button, 0, 0)
-        output_grid.addWidget(self.copy_output_root_button, 0, 1)
-        output_grid.addWidget(self.open_output_button, 1, 0, 1, 2)
-        output_grid.addWidget(self.open_stl_button, 2, 0)
-        output_grid.addWidget(self.open_3mf_button, 2, 1)
-        output_grid.addWidget(self.open_svg_button, 3, 0, 1, 2)
-        output_grid.addWidget(self.open_preview_button, 4, 0, 1, 2)
-        output_grid.addWidget(self.copy_stl_button, 5, 0)
-        output_grid.addWidget(self.copy_svg_button, 5, 1)
-        output_grid.addWidget(self.copy_mesh_report_button, 6, 0, 1, 2)
-        output_grid.addWidget(self.copy_job_status_button, 7, 0, 1, 2)
-        layout.addLayout(output_grid)
-        review_title = QLabel("Stage Compare")
+        self.generate_button.hide()
+        self.generate_all_button.hide()
+        path_tools = CollapsibleSection("Output Vault Tools", expanded=False)
+        self.path_tools_section = path_tools
+        path_grid = QGridLayout()
+        path_grid.setHorizontalSpacing(8)
+        path_grid.setVerticalSpacing(8)
+        path_grid.addWidget(self.open_output_root_button, 0, 0)
+        path_grid.addWidget(self.copy_output_root_button, 0, 1)
+        path_grid.addWidget(self.open_output_button, 1, 0, 1, 2)
+        path_grid.addWidget(self.open_stl_button, 2, 0)
+        path_grid.addWidget(self.open_3mf_button, 2, 1)
+        path_grid.addWidget(self.open_svg_button, 3, 0)
+        path_grid.addWidget(self.open_preview_button, 3, 1)
+        path_grid.addWidget(self.copy_stl_button, 4, 0)
+        path_grid.addWidget(self.copy_svg_button, 4, 1)
+        path_grid.addWidget(self.copy_mesh_report_button, 5, 0, 1, 2)
+        path_grid.addWidget(self.copy_job_status_button, 6, 0, 1, 2)
+        path_tools.body_layout.addLayout(path_grid)
+        layout.addWidget(path_tools)
+        review_section = CollapsibleSection("Review Details", expanded=False)
+        self.review_details_section = review_section
+
+        review_title = QLabel("Compare Stages")
         review_title.setObjectName("sectionTitle")
-        layout.addWidget(review_title)
+        review_section.body_layout.addWidget(review_title)
         self.review_stage = self._combo(
             ["original", "cleaned", "body", "holes", "details", "print-safe", "vector", "review SVG", "STL"]
         )
@@ -994,14 +1001,14 @@ class MainWindow(QMainWindow):
         self.geometry_report_view.setReadOnly(True)
         self.geometry_report_view.setMinimumHeight(72)
         self.geometry_report_view.setMaximumHeight(120)
-        layout.addWidget(self.review_stage)
-        layout.addWidget(self.review_warning)
-        layout.addLayout(compare_row)
-        layout.addWidget(self.geometry_report_view)
+        review_section.body_layout.addWidget(self.review_stage)
+        review_section.body_layout.addWidget(self.review_warning)
+        review_section.body_layout.addLayout(compare_row)
+        review_section.body_layout.addWidget(self.geometry_report_view)
 
-        production_title = QLabel("Production Review")
+        production_title = QLabel("Output Preview")
         production_title.setObjectName("sectionTitle")
-        layout.addWidget(production_title)
+        review_section.body_layout.addWidget(production_title)
         self.production_thumbs: dict[str, QLabel] = {}
         production_grid = QGridLayout()
         production_grid.setHorizontalSpacing(8)
@@ -1020,10 +1027,9 @@ class MainWindow(QMainWindow):
             cell = QWidget()
             cell.setLayout(wrapper)
             production_grid.addWidget(cell, index // 2, index % 2)
-        layout.addLayout(production_grid)
-        layout.addStretch(1)
-        scroll.setWidget(panel)
-        return scroll
+        review_section.body_layout.addLayout(production_grid)
+        layout.addWidget(review_section)
+        return card
 
     def _bunker_panel(self) -> QWidget:
         scroll = QScrollArea()
@@ -1031,24 +1037,116 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget()
+        panel.setObjectName("workspacePanel")
         outer = QVBoxLayout(panel)
         outer.setContentsMargins(10, 8, 10, 10)
         outer.setSpacing(10)
         workflow_header = QFrame()
         workflow_header.setObjectName("workflowCard")
-        workflow_layout = QVBoxLayout(workflow_header)
+        workflow_layout = QHBoxLayout(workflow_header)
         workflow_layout.setContentsMargins(12, 10, 12, 10)
-        workflow_layout.setSpacing(3)
-        workflow_title = QLabel("Production Pipeline")
+        workflow_layout.setSpacing(10)
+        workflow_text = QVBoxLayout()
+        workflow_text.setContentsMargins(0, 0, 0, 0)
+        workflow_text.setSpacing(3)
+        workflow_title = QLabel("Review & Export")
         workflow_title.setObjectName("sectionTitle")
-        workflow_hint = QLabel("Clean artwork, trace vectors, forge the mesh, and package outputs for review.")
+        workflow_hint = QLabel("Check the selected artwork, print readiness, and generated files before opening them in a slicer.")
         workflow_hint.setObjectName("mutedText")
         workflow_hint.setWordWrap(True)
-        workflow_layout.addWidget(workflow_title)
-        workflow_layout.addWidget(workflow_hint)
+        workflow_text.addWidget(workflow_title)
+        workflow_text.addWidget(workflow_hint)
+        self.developer_view_toggle = QCheckBox("Developer View")
+        self.developer_view_toggle.setToolTip("Show the internal processing-stage cards for diagnostics.")
+        self.developer_view_toggle.toggled.connect(self._set_developer_view_enabled)
+        workflow_layout.addLayout(workflow_text, 1)
+        workflow_layout.addWidget(self.developer_view_toggle, 0, Qt.AlignTop)
         outer.addWidget(workflow_header)
+        outer.addWidget(self._artwork_queue_card())
+
+        action_card = QFrame()
+        action_card.setObjectName("quickActionCard")
+        action_layout = QHBoxLayout(action_card)
+        action_layout.setContentsMargins(14, 12, 14, 12)
+        action_layout.setSpacing(10)
+        self.center_generate_button = QPushButton("Generate Selected")
+        self.center_generate_button.setObjectName("primaryButton")
+        self.center_generate_button.clicked.connect(self.generate)
+        self.center_generate_all_button = QPushButton("Generate Queue")
+        self.center_generate_all_button.setObjectName("secondaryButton")
+        self.center_generate_all_button.clicked.connect(self.generate_all)
+        self.center_open_stl_button = QPushButton("Open STL")
+        self.center_open_stl_button.setToolTip("Open the latest STL in the configured slicer.")
+        self.center_open_stl_button.clicked.connect(lambda: self.open_named_output(".stl"))
+        self.center_open_3mf_button = QPushButton("Open 3MF")
+        self.center_open_3mf_button.setToolTip("Open the latest 3MF in the configured slicer.")
+        self.center_open_3mf_button.clicked.connect(lambda: self.open_named_output(".3mf"))
+        self.center_open_output_button = QPushButton("Open Job Folder")
+        self.center_open_output_button.setToolTip("Open the latest generated job folder.")
+        self.center_open_output_button.clicked.connect(self.open_latest_or_root)
+        for button in [self.center_open_stl_button, self.center_open_3mf_button, self.center_open_output_button]:
+            button.setEnabled(False)
+            self.output_buttons.append(button)
+        action_layout.addWidget(self.center_generate_button, 2)
+        action_layout.addWidget(self.center_generate_all_button, 2)
+        action_layout.addWidget(self.center_open_stl_button)
+        action_layout.addWidget(self.center_open_3mf_button)
+        action_layout.addWidget(self.center_open_output_button)
+        outer.addWidget(action_card)
+
+        preview_card = QFrame()
+        preview_card.setObjectName("reviewPanel")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(14, 14, 14, 14)
+        preview_layout.setSpacing(10)
+        preview_title_row = QHBoxLayout()
+        preview_title = QLabel("Artwork Preview")
+        preview_title.setObjectName("sectionTitle")
+        self.customer_preview_caption = QLabel("Add artwork to preview it here. Generate to see the final review render.")
+        self.customer_preview_caption.setObjectName("mutedText")
+        self.customer_preview_caption.setWordWrap(True)
+        preview_title_row.addWidget(preview_title)
+        preview_title_row.addStretch(1)
+        preview_layout.addLayout(preview_title_row)
+        self.customer_preview_label = QLabel("No artwork selected")
+        self.customer_preview_label.setObjectName("largePreview")
+        self.customer_preview_label.setMinimumHeight(330)
+        self.customer_preview_label.setAlignment(Qt.AlignCenter)
+        self.customer_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        preview_layout.addWidget(self.customer_preview_label, 1)
+        preview_layout.addWidget(self.customer_preview_caption)
+        outer.addWidget(preview_card, 2)
+
+        summary_card = QFrame()
+        summary_card.setObjectName("printSummaryCard")
+        summary_layout = QGridLayout(summary_card)
+        summary_layout.setContentsMargins(14, 12, 14, 12)
+        summary_layout.setHorizontalSpacing(14)
+        summary_layout.setVerticalSpacing(7)
+        summary_title = QLabel("Print-Ready Summary")
+        summary_title.setObjectName("sectionTitle")
+        summary_layout.addWidget(summary_title, 0, 0, 1, 2)
+        self.summary_product_value = self._summary_value_label("Product not selected")
+        self.summary_print_safe_value = self._summary_value_label("Print-safe cleanup on")
+        self.summary_stl_value = self._summary_value_label("Waiting for generation")
+        self.summary_3mf_value = self._summary_value_label("Waiting for generation")
+        self.summary_orca_value = self._summary_value_label("Available for Filament Relief")
+        summary_rows = [
+            ("Mode", self.summary_product_value),
+            ("Print safety", self.summary_print_safe_value),
+            ("STL", self.summary_stl_value),
+            ("3MF", self.summary_3mf_value),
+            ("Orca project", self.summary_orca_value),
+        ]
+        for index, (label_text, value_label) in enumerate(summary_rows, start=1):
+            label = QLabel(label_text)
+            label.setObjectName("summaryLabel")
+            summary_layout.addWidget(label, index, 0)
+            summary_layout.addWidget(value_label, index, 1)
+        outer.addWidget(summary_card)
 
         grid_widget = QWidget()
+        grid_widget.setObjectName("developerPipeline")
         grid = QGridLayout(grid_widget)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
@@ -1062,9 +1160,97 @@ class MainWindow(QMainWindow):
         for column in range(columns):
             grid.setColumnStretch(column, 1)
         grid.setRowStretch(3, 1)
+        self.developer_pipeline_widget = grid_widget
         outer.addWidget(grid_widget, 1)
+        self._set_developer_view_enabled(False)
         scroll.setWidget(panel)
         return scroll
+
+    def _summary_value_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("summaryValue")
+        label.setWordWrap(True)
+        return label
+
+    def _set_developer_view_enabled(self, enabled: bool) -> None:
+        if hasattr(self, "developer_view_toggle") and self.developer_view_toggle.isChecked() != enabled:
+            previous = self.developer_view_toggle.blockSignals(True)
+            self.developer_view_toggle.setChecked(enabled)
+            self.developer_view_toggle.blockSignals(previous)
+        if hasattr(self, "developer_pipeline_widget"):
+            self.developer_pipeline_widget.setVisible(enabled)
+
+    def _queue_selection_changed(self, *_args: object) -> None:
+        self.refresh_artwork_recommendation()
+        self._refresh_customer_preview()
+
+    def _refresh_customer_preview(self) -> None:
+        if not hasattr(self, "customer_preview_label"):
+            return
+        selected = self._selected_or_first_image()
+        generated_preview: Path | None = None
+        if selected and self.current_output_dir and self.current_stem == selected.stem:
+            for candidate in (
+                self._preview_output_path(f"{self.current_stem}_preview.png"),
+                self._preview_output_path(f"{self.current_stem}_preview_stl.png"),
+                self._preview_output_path(f"{self.current_stem}_preview_original.png"),
+            ):
+                if candidate.exists():
+                    generated_preview = candidate
+                    break
+        if generated_preview:
+            self._set_label_pixmap(self.customer_preview_label, generated_preview, "Generated preview")
+            self.customer_preview_caption.setText("Generated preview from the latest job.")
+            self.customer_preview_label.setToolTip(str(generated_preview))
+            self._update_print_ready_summary()
+            return
+        if selected and selected.exists():
+            self._set_label_pixmap(self.customer_preview_label, selected, selected.name)
+            self.customer_preview_caption.setText(f"Selected artwork: {selected.name}")
+            self.customer_preview_label.setToolTip(str(selected))
+        else:
+            self.customer_preview_label.clear()
+            self.customer_preview_label.setText("No artwork selected")
+            self.customer_preview_label.setToolTip("")
+            self.customer_preview_caption.setText("Add artwork to preview it here. Generate to see the final review render.")
+        self._update_print_ready_summary()
+
+    def _update_print_ready_summary(self) -> None:
+        if not hasattr(self, "summary_product_value"):
+            return
+        product_label = self.product_mode.currentText() if hasattr(self, "product_mode") else "Product not selected"
+        self.summary_product_value.setText(product_label)
+        if hasattr(self, "printability_enabled") and self.printability_enabled.isChecked():
+            self.summary_print_safe_value.setText(f"On - minimum detail {self.printability_min_feature_width.value():.2f} mm")
+        else:
+            self.summary_print_safe_value.setText("Off - geometry minimums disabled")
+
+        if not self.current_output_dir:
+            self.summary_stl_value.setText("Waiting for generation")
+            self.summary_3mf_value.setText("Waiting for generation")
+            if hasattr(self, "product_mode") and self._combo_value(self.product_mode) == "filament_swap_relief":
+                self.summary_orca_value.setText("Will export when enabled")
+            else:
+                self.summary_orca_value.setText("Available for Filament Relief")
+            return
+
+        paths = self._current_job_paths()
+        status = self._current_job_status()
+        stl_path = self._named_output_path(".stl")
+        three_mf_path = self._named_output_path(".3mf")
+        stl_selection = select_specific_slicer_input(paths, status, "stl")
+        three_mf_selection = select_specific_slicer_input(paths, status, "3mf")
+        self.summary_stl_value.setText("Ready" if stl_path and stl_path.exists() and stl_selection.success else "Not created")
+        self.summary_3mf_value.setText(
+            "Validated and ready" if three_mf_path and three_mf_path.exists() and three_mf_selection.success else "Not created"
+        )
+        orca_path = paths.orca_project_3mf_path if paths else None
+        if orca_path and orca_path.exists():
+            self.summary_orca_value.setText("Orca project ready")
+        elif hasattr(self, "product_mode") and self._combo_value(self.product_mode) == "filament_swap_relief":
+            self.summary_orca_value.setText("Will export when enabled" if self.filament_orca_project_3mf.isChecked() else "Off")
+        else:
+            self.summary_orca_value.setText("Filament Relief only")
 
     def _settings_panel(self) -> QWidget:
         scroll = QScrollArea()
@@ -1109,17 +1295,17 @@ class MainWindow(QMainWindow):
         self.island_distance = self._double_spin(0.0, 100.0, self.config.silhouette.island_near_body_distance_px)
         self.detail_height = self._double_spin(0.0, 10.0, self.config.stl.detail_height_mm)
         self.engraving_depth = self._double_spin(0.0, 10.0, self.config.stl.engraving_depth_mm)
-        self.preserve_holes = QCheckBox("preserve_holes")
+        self.preserve_holes = QCheckBox("Preserve holes")
         self.preserve_holes.setChecked(self.config.silhouette.preserve_holes)
-        self.preserve_details = QCheckBox("preserve_internal_details")
+        self.preserve_details = QCheckBox("Keep fine inner details")
         self.preserve_details.setChecked(self.config.silhouette.preserve_internal_details)
-        self.remove_islands = QCheckBox("remove_isolated_islands")
+        self.remove_islands = QCheckBox("Remove tiny islands")
         self.remove_islands.setChecked(self.config.silhouette.remove_small_islands)
-        self.preserve_islands_near_body = QCheckBox("preserve_islands_near_body")
+        self.preserve_islands_near_body = QCheckBox("Keep nearby detached details")
         self.preserve_islands_near_body.setChecked(self.config.silhouette.preserve_islands_near_body)
-        self.background_removal = QCheckBox("background_removal_enabled")
+        self.background_removal = QCheckBox("Remove background")
         self.background_removal.setChecked(self.config.pipeline.background_removal_enabled)
-        self.keychain_hole = QCheckBox("add_keychain_hole")
+        self.keychain_hole = QCheckBox("Add keychain hole")
         self.keychain_hole.setChecked(self.config.stl.add_keychain_hole)
         self.keychain_diameter = self._double_spin(1.0, 20.0, self.config.stl.keychain_hole_diameter_mm)
         self.output_scale = self._double_spin(10.0, 300.0, self.config.stl.output_scale_mm)
@@ -1219,6 +1405,7 @@ class MainWindow(QMainWindow):
             "This does not slice, export G-code, or send a print."
         )
         self.filament_orca_project_3mf.setChecked(self.config.filament_swap_relief.export_orca_project_3mf)
+        self.filament_orca_project_3mf.toggled.connect(lambda *_args: self._update_print_ready_summary())
         self.printer_profile_name = QLineEdit(self.config.printer_profile.profile_name)
         self.printer_nozzle_diameter = self._double_spin(0.1, 2.0, self.config.printer_profile.nozzle_diameter_mm)
         self.printer_line_width = self._double_spin(0.1, 3.0, self.config.printer_profile.line_width_mm)
@@ -1234,6 +1421,7 @@ class MainWindow(QMainWindow):
             "Remove tiny unprintable pieces and strengthen fragile details at the final model size."
         )
         self.printability_enabled.setChecked(self.config.printability.enforce_minimum_printable_geometry)
+        self.printability_enabled.toggled.connect(lambda *_args: self._update_print_ready_summary())
         self.printability_min_feature_width = self._double_spin(
             0.05,
             5.0,
@@ -1296,8 +1484,9 @@ class MainWindow(QMainWindow):
         self.filament_alignment_mode.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
         self.filament_relief_style.currentIndexChanged.connect(self._refresh_filament_color_plan_estimate)
         self.filament_solid_base.toggled.connect(self._refresh_filament_color_plan_estimate)
+        self.filament_solid_base.toggled.connect(lambda *_args: self._update_print_ready_summary())
 
-        preset_group = self._form_group("Presets", [("Artwork style", self.cleanup_preset)])
+        preset_group = self._form_group("Artwork Recommendation", [("Artwork style", self.cleanup_preset)])
         self.preset_help = QLabel("")
         self.preset_help.setObjectName("presetDescription")
         self.preset_help.setWordWrap(True)
@@ -1315,9 +1504,10 @@ class MainWindow(QMainWindow):
         preset_group.layout().addRow("Recommendation", self.recommendation_summary)
         preset_group.layout().addRow("", self.recommendation_reasons)
         preset_group.layout().addRow("", self.apply_recommendation_button)
+        self.preset_group = preset_group
         layout.addWidget(preset_group)
         product_group = self._form_group(
-            "Product Setup",
+            "Print Style",
             [
                 ("Product", self.product_mode),
                 ("Detail handling", self.detail_mode),
@@ -1337,7 +1527,41 @@ class MainWindow(QMainWindow):
         product_group.layout().addRow(self.filament_swap_note)
         layout.addWidget(product_group)
 
-        advanced_section = CollapsibleSection("Advanced Settings", expanded=False)
+        print_safe_quick_group = QGroupBox("Print-Safe Cleanup")
+        print_safe_quick_group.setObjectName("settingsGroup")
+        self.print_safe_quick_group = print_safe_quick_group
+        print_safe_layout = QVBoxLayout(print_safe_quick_group)
+        print_safe_layout.setContentsMargins(12, 12, 12, 12)
+        print_safe_layout.setSpacing(8)
+        print_safe_note = QLabel("Keeps exported geometry practical for a real nozzle before STL and 3MF are written.")
+        print_safe_note.setObjectName("mutedText")
+        print_safe_note.setWordWrap(True)
+        print_safe_layout.addWidget(print_safe_note)
+        print_safe_layout.addWidget(self.printability_enabled)
+        print_safe_layout.addWidget(self.printability_printer_aware_defaults)
+        print_safe_layout.addWidget(self.apply_printer_defaults_button)
+        layout.addWidget(print_safe_quick_group)
+
+        self.filament_quick_group = self._form_group(
+            "Filament Relief Setup",
+            [
+                ("Width mm", self.filament_width),
+                ("Colors", self.filament_color_count),
+                ("Detail", self.filament_detail_quality),
+                ("Relief", self.filament_relief_style),
+                ("First color mm", self.filament_base_height),
+                ("Color layer mm", self.filament_layer_step),
+                ("First layer mm", self.filament_first_layer_height),
+                ("Print layer mm", self.filament_normal_layer_height),
+            ],
+        )
+        self.filament_quick_group.layout().addRow(self.filament_solid_base)
+        self.filament_quick_group.layout().addRow(self.filament_merge_similar_colors)
+        self.filament_quick_group.layout().addRow(self.filament_auto_background_ignore)
+        self.filament_quick_group.layout().addRow(self.filament_orca_project_3mf)
+        layout.addWidget(self.filament_quick_group)
+
+        advanced_section = CollapsibleSection("Fine-Tune / Developer Settings", expanded=False)
         self.advanced_section = advanced_section
         advanced_section.body_layout.addWidget(self._form_group("STL Engine", [("Backend", self.stl_backend)]))
         advanced_section.body_layout.addWidget(
@@ -1383,7 +1607,7 @@ class MainWindow(QMainWindow):
         advanced_section.body_layout.addWidget(printer_group)
 
         printability_group = self._form_group(
-            "Print-Safe Cleanup",
+            "Print-Safe Thresholds",
             [
                 ("Minimum detail width mm", self.printability_min_feature_width),
                 ("Shortest usable stroke mm", self.printability_min_segment_length),
@@ -1394,9 +1618,6 @@ class MainWindow(QMainWindow):
                 ("Smallest part dimension mm", self.printability_min_component_dimension),
             ],
         )
-        printability_group.layout().addRow(self.printability_printer_aware_defaults)
-        printability_group.layout().addRow(self.printability_enabled)
-        printability_group.layout().addRow("", self.apply_printer_defaults_button)
         advanced_section.body_layout.addWidget(printability_group)
 
         keychain_group = self._form_group("Keychain", [("Hole diameter mm", self.keychain_diameter)])
@@ -1421,17 +1642,9 @@ class MainWindow(QMainWindow):
         lithophane_group.layout().addRow(self.lithophane_autocontrast)
         advanced_section.body_layout.addWidget(lithophane_group)
         filament_group = self._form_group(
-            "Filament Swap Relief",
+            "Filament Relief Cleanup",
             [
-                ("Width mm", self.filament_width),
-                ("Color count", self.filament_color_count),
-                ("Detail quality", self.filament_detail_quality),
-                ("Base height mm", self.filament_base_height),
-                ("Step height mm", self.filament_layer_step),
-                ("First layer height mm", self.filament_first_layer_height),
-                ("Normal layer height mm", self.filament_normal_layer_height),
                 ("Height alignment", self.filament_alignment_mode),
-                ("Relief style", self.filament_relief_style),
                 ("Palette color space", self.filament_palette_color_space),
                 ("Island handling", self.filament_island_policy),
                 ("Min region area px", self.filament_min_region_area),
@@ -1441,10 +1654,6 @@ class MainWindow(QMainWindow):
             ],
         )
         self.filament_group = filament_group
-        filament_group.layout().addRow(self.filament_auto_background_ignore)
-        filament_group.layout().addRow(self.filament_merge_similar_colors)
-        filament_group.layout().addRow(self.filament_solid_base)
-        filament_group.layout().addRow(self.filament_orca_project_3mf)
         advanced_section.body_layout.addWidget(filament_group)
         self.filament_plan_group = QGroupBox("Filament Color Plan")
         self.filament_plan_group.setObjectName("settingsGroup")
@@ -1603,6 +1812,10 @@ class MainWindow(QMainWindow):
             self.filament_swap_note.setVisible(is_filament_swap)
         if hasattr(self, "lithophane_group"):
             self.lithophane_group.setVisible(is_lithophane)
+        if hasattr(self, "preset_group"):
+            self.preset_group.setVisible(not is_special_heightfield)
+        if hasattr(self, "filament_quick_group"):
+            self.filament_quick_group.setVisible(is_filament_swap)
         if hasattr(self, "filament_group"):
             self.filament_group.setVisible(is_filament_swap)
         if hasattr(self, "filament_plan_group"):
@@ -1678,6 +1891,7 @@ class MainWindow(QMainWindow):
         self._update_filament_policy_controls()
         self._refresh_filament_color_plan_estimate()
         self.refresh_artwork_recommendation()
+        self._update_print_ready_summary()
 
     def _update_filament_policy_controls(self) -> None:
         if not hasattr(self, "filament_island_policy") or not hasattr(self, "product_mode"):
@@ -1816,6 +2030,7 @@ class MainWindow(QMainWindow):
         if self.settings_dialog is None:
             self.settings_dialog = SettingsDialog(self.ui_preferences, self.version, self.config.output_dir, self)
             self.settings_dialog.preferences_changed.connect(self.update_ui_preferences)
+            self.settings_dialog.status_log_requested.connect(self.open_status_log_dialog)
         else:
             self.settings_dialog.set_preferences(self.ui_preferences)
         self.settings_dialog.show()
@@ -1923,7 +2138,7 @@ class MainWindow(QMainWindow):
         if files and not had_selection:
             self.queue.setCurrentRow(0)
         elif files:
-            self.refresh_artwork_recommendation()
+            self._queue_selection_changed()
 
     def generate(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -1979,6 +2194,7 @@ class MainWindow(QMainWindow):
             else self._selected_stl_backend()
         )
         self.logs.append(f"Requested STL backend: {requested_backend}")
+        self._refresh_customer_preview()
         self.current_stage = "Intake Room"
         self.current_stage_progress_index = 0
         self.update_runtime_status()
@@ -2007,6 +2223,10 @@ class MainWindow(QMainWindow):
     def _set_processing_buttons_enabled(self, enabled: bool) -> None:
         self.generate_button.setEnabled(enabled)
         self.generate_all_button.setEnabled(enabled)
+        if hasattr(self, "center_generate_button"):
+            self.center_generate_button.setEnabled(enabled)
+        if hasattr(self, "center_generate_all_button"):
+            self.center_generate_all_button.setEnabled(enabled)
 
     def _config_from_controls(self) -> AppConfig:
         product_mode = self._combo_value(self.product_mode)
@@ -2174,6 +2394,8 @@ class MainWindow(QMainWindow):
             room_index = ROOMS.index(room)
             self.current_stage = room
             self.current_stage_progress_index = room_index + (1 if state in {"done", "failed"} else 0)
+            if hasattr(self, "customer_preview_caption"):
+                self.customer_preview_caption.setText(f"Generating: {room} - {message}")
             self.update_runtime_status()
 
     def job_finished(self, ok: bool, output_dir: str, stem: str, input_path: str, requested_backend: str) -> None:
@@ -2204,6 +2426,7 @@ class MainWindow(QMainWindow):
             self.batch_failure_count += 1
             self.logs.append("Job complete with warnings or failures. Continuing if batch jobs remain.")
         self.refresh_review()
+        self._refresh_customer_preview()
         self.batch_index += 1
         if self.batch_index < self.batch_total:
             self.logs.append(f"Starting next queued image ({self.batch_index + 1}/{self.batch_total}).")
@@ -2359,6 +2582,7 @@ class MainWindow(QMainWindow):
             for button in self.output_buttons:
                 button.setEnabled(False)
             self.open_output_button.setEnabled(True)
+            self._update_print_ready_summary()
             return
         svg_path = self._named_output_path(".svg")
         stl_path = self._named_output_path(".stl")
@@ -2381,24 +2605,65 @@ class MainWindow(QMainWindow):
             self.copy_mesh_report_button: mesh_report_path.exists(),
             self.copy_job_status_button: job_status_path.exists(),
         }
+        if hasattr(self, "center_open_output_button"):
+            availability[self.center_open_output_button] = self.current_output_dir.exists()
+            availability[self.center_open_stl_button] = bool(stl_path and stl_path.exists() and stl_selection.success)
+            availability[self.center_open_3mf_button] = bool(
+                three_mf_path and three_mf_path.exists() and three_mf_selection.success
+            )
         for button, enabled in availability.items():
             button.setEnabled(enabled)
+        self._update_print_ready_summary()
 
     def toggle_log(self) -> None:
-        self.set_log_expanded(not self.log_expanded)
+        self.open_status_log_dialog()
 
     def set_log_expanded(self, expanded: bool) -> None:
         self.log_expanded = expanded
-        self.logs.setVisible(expanded)
-        self.log_toggle_button.setText("Hide Log" if expanded else "Show Log")
-        if expanded:
-            self.log_panel.setMinimumHeight(150)
-            self.log_panel.setMaximumHeight(260)
-            self.vertical_splitter.setSizes([610, 190])
-        else:
-            self.log_panel.setMinimumHeight(44)
-            self.log_panel.setMaximumHeight(58)
-            self.vertical_splitter.setSizes([760, 48])
+        if self.status_log_view is not None:
+            self.status_log_view.setPlainText(self.logs.toPlainText())
+
+    def open_status_log_dialog(self) -> None:
+        if self.status_log_dialog is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Status Log")
+            dialog.resize(780, 460)
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(10)
+            title = QLabel("Status Log")
+            title.setObjectName("dialogTitle")
+            hint = QLabel("Recent job messages and troubleshooting details.")
+            hint.setObjectName("mutedText")
+            hint.setWordWrap(True)
+            self.status_log_view = QTextEdit()
+            self.status_log_view.setReadOnly(True)
+            self.status_log_view.setMinimumHeight(300)
+            button_row = QHBoxLayout()
+            copy_button = QPushButton("Copy Log")
+            copy_button.setObjectName("secondaryButton")
+            close_button = QPushButton("Close")
+            close_button.setObjectName("primaryButton")
+            copy_button.clicked.connect(self.copy_status_log)
+            close_button.clicked.connect(dialog.accept)
+            button_row.addWidget(copy_button)
+            button_row.addStretch(1)
+            button_row.addWidget(close_button)
+            layout.addWidget(title)
+            layout.addWidget(hint)
+            layout.addWidget(self.status_log_view, 1)
+            layout.addLayout(button_row)
+            self.status_log_dialog = dialog
+        if self.status_log_view is not None:
+            self.status_log_view.setPlainText(self.logs.toPlainText())
+            scrollbar = self.status_log_view.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+        self.status_log_dialog.show()
+        self.status_log_dialog.raise_()
+        self.status_log_dialog.activateWindow()
+
+    def copy_status_log(self) -> None:
+        QApplication.clipboard().setText(self.logs.toPlainText())
 
     def update_runtime_status(self) -> None:
         if self.batch_total <= 0 or not self.runtime_timer.isActive():
@@ -2449,6 +2714,7 @@ class MainWindow(QMainWindow):
             label = "Ready"
             state = "ready"
         self.header_status_badge.setText(label)
+        self.header_status_badge.setToolTip(text)
         self.header_status_badge.setProperty("state", state)
         self.header_status_badge.style().unpolish(self.header_status_badge)
         self.header_status_badge.style().polish(self.header_status_badge)
@@ -2628,6 +2894,8 @@ class MainWindow(QMainWindow):
             label.setFixedSize(review_width, review_height)
         if self.current_output_dir:
             self.refresh_review()
+        else:
+            self._refresh_customer_preview()
 
     def _theme_tokens(self) -> dict[str, str]:
         accent, accent_border, accent_hover = ACCENT_STYLES.get(
@@ -2725,7 +2993,9 @@ class MainWindow(QMainWindow):
             #mutedText { color: __MUTED__; font-size: 9pt; }
             #presetDescription { color: __MUTED_2__; font-size: 9pt; line-height: 130%; padding: 2px 0 0 0; }
             #statusSummary { color: __MUTED_2__; font-size: 9.5pt; padding: 8px 10px 0 10px; }
-            #sidePanel, #workflowCard { background: __PANEL__; border: 1px solid __BORDER__; border-radius: 10px; }
+            #summaryLabel { color: __MUTED__; font-size: 9pt; font-weight: 700; }
+            #summaryValue { color: __TITLE_TEXT__; font-size: 9.5pt; font-weight: 650; }
+            #sidePanel, #workflowCard, #reviewPanel, #printSummaryCard, #quickActionCard { background: __PANEL__; border: 1px solid __BORDER__; border-radius: 10px; }
             #collapsibleSection { background: transparent; border: 0; }
             QDialog { background: __BG__; }
             QScrollArea { border: 0; background: __BG__; }
@@ -2752,6 +3022,7 @@ class MainWindow(QMainWindow):
             #roomTitle { font-weight: 700; color: __TITLE_TEXT__; }
             #roomStatus { color: __MUTED__; font-size: 9pt; }
             #thumb { background: __FIELD__; border: 1px solid __BORDER_SOFT__; border-radius: 5px; color: __DISABLED_TEXT__; }
+            #largePreview { background: __FIELD__; border: 1px solid __BORDER_SOFT__; border-radius: 8px; color: __DISABLED_TEXT__; font-size: 13pt; }
             #connector { color: __MUTED__; font-size: 13px; }
             QProgressBar { border: 0; height: 6px; background: __PROGRESS_BG__; border-radius: 3px; }
             QProgressBar::chunk { background: __ACCENT__; border-radius: 3px; }
@@ -2773,7 +3044,7 @@ def main() -> None:
         if not icon.isNull():
             app.setWindowIcon(icon)
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
 
 

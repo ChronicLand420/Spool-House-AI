@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton
 
 from spool_house_ai.gui import MainWindow
 
@@ -42,6 +42,56 @@ class GuiRecommendationTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_customer_review_surface_hides_developer_pipeline_by_default(self) -> None:
+        window = MainWindow()
+        try:
+            label_texts = {label.text() for label in window.findChildren(QLabel)}
+            self.assertIn("Review & Export", label_texts)
+            self.assertIn("Artwork Queue", label_texts)
+            self.assertIn("Artwork Preview", label_texts)
+            self.assertIn("Print-Ready Summary", label_texts)
+            self.assertNotIn("Status Log", label_texts)
+            self.assertEqual(window.main_splitter.count(), 2)
+            self.assertFalse(hasattr(window, "left_scroll"))
+            self.assertTrue(hasattr(window, "developer_view_toggle"))
+            self.assertTrue(window.developer_pipeline_widget.isHidden())
+            self.assertTrue(window.review_details_section.body.isHidden())
+            self.assertTrue(window.path_tools_section.body.isHidden())
+            button_texts = {button.text() for button in window.findChildren(QPushButton)}
+            self.assertIn("Generate Selected", button_texts)
+            self.assertIn("Generate Queue", button_texts)
+            self.assertIn("Open Job Folder", button_texts)
+            self.assertNotIn("Show Log", button_texts)
+
+            window.developer_view_toggle.setChecked(True)
+            self.assertFalse(window.developer_pipeline_widget.isHidden())
+        finally:
+            window.close()
+
+    def test_status_log_is_available_from_settings_not_bottom_bar(self) -> None:
+        window = MainWindow()
+        try:
+            self.assertFalse(hasattr(window, "log_toggle_button"))
+            self.assertFalse(hasattr(window, "log_panel"))
+            window.logs.append("diagnostic message")
+            window.open_settings()
+            self.assertIsNotNone(window.settings_dialog)
+            settings_buttons = {button.text() for button in window.settings_dialog.findChildren(QPushButton)}
+            settings_labels = {label.text() for label in window.settings_dialog.findChildren(QLabel)}
+            self.assertIn("Open Status Log", settings_buttons)
+            self.assertNotIn("Startup log", settings_labels)
+
+            window.settings_dialog.open_status_log_button.click()
+            self.assertIsNotNone(window.status_log_dialog)
+            self.assertIsNotNone(window.status_log_view)
+            self.assertIn("diagnostic message", window.status_log_view.toPlainText())
+        finally:
+            if window.settings_dialog is not None:
+                window.settings_dialog.close()
+            if window.status_log_dialog is not None:
+                window.status_log_dialog.close()
+            window.close()
+
     def test_apply_recommendation_updates_preset_and_finished_thickness(self) -> None:
         window = MainWindow()
         try:
@@ -72,8 +122,10 @@ class GuiRecommendationTests(unittest.TestCase):
             window.product_mode.setCurrentIndex(product_index)
 
             self.assertTrue(hasattr(window, "filament_detail_quality"))
+            self.assertTrue(hasattr(window, "filament_quick_group"))
             self.assertTrue(hasattr(window, "filament_solid_base"))
             self.assertTrue(hasattr(window, "filament_orca_project_3mf"))
+            self.assertFalse(window.filament_quick_group.isHidden())
             self.assertEqual(window._combo_value(window.filament_detail_quality), "700000")
 
             ultra_index = window.filament_detail_quality.findData("1600000")
@@ -107,6 +159,11 @@ class GuiRecommendationTests(unittest.TestCase):
             self.assertIn("Use printer/nozzle defaults", visible_text)
             self.assertIn("Use Printer Defaults", visible_text)
             self.assertNotIn("Enforce minimum printable geometry", visible_text)
+            self.assertNotIn("preserve_holes", visible_text)
+            self.assertNotIn("preserve_internal_details", visible_text)
+            self.assertNotIn("remove_isolated_islands", visible_text)
+            self.assertIn("Preserve holes", visible_text)
+            self.assertIn("Keep fine inner details", visible_text)
         finally:
             window.close()
 
