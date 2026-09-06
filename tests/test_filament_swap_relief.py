@@ -17,6 +17,8 @@ from spool_house_ai.pipeline import ImagePipeline
 from spool_house_ai.processing.filament_swap import (
     FILAMENT_SWAP_BACKEND,
     _effective_contour_upsample_factor,
+    _mask_to_geometry,
+    _mask_to_quality_contour_geometry,
     _stacked_shell_vector_mesh_from_height_map,
     create_filament_swap_relief_stl,
 )
@@ -29,8 +31,8 @@ class FilamentSwapReliefTests(unittest.TestCase):
 
         self.assertEqual(config.filament_swap_relief.color_count, 3)
         self.assertAlmostEqual(config.filament_swap_relief.width_mm, 120.0)
-        self.assertAlmostEqual(config.filament_swap_relief.base_height_mm, 0.8)
-        self.assertAlmostEqual(config.filament_swap_relief.layer_step_mm, 0.4)
+        self.assertAlmostEqual(config.filament_swap_relief.base_height_mm, 2.0)
+        self.assertAlmostEqual(config.filament_swap_relief.layer_step_mm, 0.8)
         self.assertAlmostEqual(config.filament_swap_relief.first_layer_height_mm, 0.2)
         self.assertAlmostEqual(config.filament_swap_relief.layer_height_mm, 0.2)
         self.assertEqual(config.filament_swap_relief.height_alignment_mode, "snap_up")
@@ -46,7 +48,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertAlmostEqual(config.filament_swap_relief.solid_base_thickness_mm, 2.0)
         self.assertAlmostEqual(config.filament_swap_relief.solid_base_color_band_height_mm, 0.8)
         self.assertTrue(config.filament_swap_relief.export_orca_project_3mf)
-        self.assertEqual(config.filament_swap_relief.relief_style, "stacked_blocks")
+        self.assertEqual(config.filament_swap_relief.relief_style, "auto")
         self.assertEqual(config.filament_swap_relief.mesh_style, "vector_contours")
         self.assertEqual(config.filament_swap_relief.contour_upsample_factor, 2)
         self.assertAlmostEqual(config.filament_swap_relief.contour_simplify_tolerance_px, 0.35)
@@ -73,7 +75,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
         self.assertEqual(config.height_alignment_mode, "snap_up")
         self.assertAlmostEqual(config.height_alignment_tolerance_mm, 0.001)
         self.assertAlmostEqual(config.min_model_thickness_mm, 2.0)
-        self.assertEqual(config.relief_style, "stacked_blocks")
+        self.assertEqual(config.relief_style, "auto")
         self.assertEqual(config.mesh_style, "vector_contours")
         self.assertEqual(config.contour_upsample_factor, 2)
         self.assertTrue(config.merge_similar_colors)
@@ -86,6 +88,14 @@ class FilamentSwapReliefTests(unittest.TestCase):
 
     def test_invalid_filament_relief_style_and_mesh_style_are_rejected(self) -> None:
         load_config_dict = __import__("spool_house_ai.config", fromlist=["_filament_swap_relief_config"])
+        self.assertEqual(
+            load_config_dict._filament_swap_relief_config({"relief_style": "silhouette_outline"}).relief_style,
+            "silhouette_outline",
+        )
+        self.assertEqual(
+            load_config_dict._filament_swap_relief_config({"relief_style": "auto"}).relief_style,
+            "auto",
+        )
         with self.assertRaises(ValueError):
             load_config_dict._filament_swap_relief_config({"relief_style": "sunken_magic"})
         with self.assertRaises(ValueError):
@@ -136,17 +146,17 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(metadata["ignored_background_color_hex"], "#505A69")
             self.assertEqual(metadata["color_count_kept"], 3)
             heights = [color["assigned_height_mm"] for color in metadata["detected_colors"]]
-            self.assertEqual(heights, [0.8, 1.2, 2.0])
+            self.assertEqual(heights, [2.0, 2.8, 3.6])
             self.assertEqual(metadata["detected_colors"][0]["suggested_color_name"], "white")
             self.assertEqual(metadata["detected_colors"][1]["suggested_color_name"], "red")
             self.assertEqual(metadata["detected_colors"][2]["suggested_color_name"], "black")
-            self.assertEqual(metadata["detected_colors"][1]["filament_change_at_mm"], 0.8)
-            self.assertEqual(metadata["detected_colors"][2]["filament_change_at_mm"], 1.2)
-            self.assertEqual(metadata["detected_colors"][1]["change_before_layer"], 5)
-            self.assertEqual(metadata["detected_colors"][2]["change_before_layer"], 7)
-            self.assertEqual(metadata["total_printed_layers"], 10)
-            self.assertEqual(metadata["color_plan"]["height_settings"]["aligned_cumulative_boundaries_mm"], [0.0, 0.8, 1.2, 2.0])
-            self.assertEqual(metadata["final_height_mm"], 2.0)
+            self.assertEqual(metadata["detected_colors"][1]["filament_change_at_mm"], 2.0)
+            self.assertEqual(metadata["detected_colors"][2]["filament_change_at_mm"], 2.8)
+            self.assertEqual(metadata["detected_colors"][1]["change_before_layer"], 11)
+            self.assertEqual(metadata["detected_colors"][2]["change_before_layer"], 15)
+            self.assertEqual(metadata["total_printed_layers"], 18)
+            self.assertEqual(metadata["color_plan"]["height_settings"]["aligned_cumulative_boundaries_mm"], [0.0, 2.0, 2.8, 3.6])
+            self.assertEqual(metadata["final_height_mm"], 3.6)
             self.assertGreaterEqual(metadata["final_height_mm"], metadata["min_model_thickness_mm"])
             self.assertEqual(metadata["palette_color_space"], "rgb")
             self.assertEqual(metadata["background_confidence_threshold"], 0.45)
@@ -179,6 +189,8 @@ class FilamentSwapReliefTests(unittest.TestCase):
             stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
             report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
 
+            self.assertEqual(metadata["requested_relief_style"], "auto")
+            self.assertEqual(metadata["effective_relief_style"], "stacked_blocks")
             self.assertEqual(metadata["relief_style"], "stacked_blocks")
             self.assertEqual(metadata["similar_color_merge_count"], 1)
             self.assertEqual(metadata["color_count_kept"], 2)
@@ -192,9 +204,9 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertEqual(report.overused_edge_count, 0)
             self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertEqual(metadata["detected_colors"][0]["suggested_color_name"], "green")
-            self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 0.8)
+            self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 2.0)
             self.assertEqual(metadata["detected_colors"][1]["hex"], "#FAE00E")
-            self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.0)
+            self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.8)
             self.assertLess(report.face_count, 2500)
 
     def test_stacked_blocks_do_not_fill_raised_border_interior(self) -> None:
@@ -224,8 +236,8 @@ class FilamentSwapReliefTests(unittest.TestCase):
             stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
             report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
             mesh = trimesh.load_mesh(stl_path, process=True)
-            lower_area = self._horizontal_face_area(mesh, 0.8)
-            upper_area = self._horizontal_face_area(mesh, 2.0)
+            lower_area = self._horizontal_face_area(mesh, 2.0)
+            upper_area = self._horizontal_face_area(mesh, 2.8)
 
             self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
             self.assertEqual(metadata["detected_colors"][0]["suggested_color_name"], "green")
@@ -289,6 +301,166 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertGreater(base_area, first_color_area)
             self.assertGreater(first_color_area, second_color_area)
             self.assertGreater(second_color_area, 0.0)
+
+    def test_silhouette_outline_ignores_black_canvas_and_keeps_colored_strokes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "outline_art.png"
+            stl_path = temp_path / "outline_art.stl"
+            image = Image.new("RGB", (120, 120), (0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((10, 10, 110, 110), outline=(40, 40, 40), width=3)
+            draw.ellipse((18, 22, 56, 60), outline=(0, 220, 255), width=6)
+            draw.rounded_rectangle((70, 22, 106, 58), radius=8, outline=(235, 20, 35), width=5)
+            draw.arc((38, 72, 86, 106), start=10, end=330, fill=(255, 255, 255), width=3)
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=120.0,
+                color_count=5,
+                relief_style="silhouette_outline",
+                auto_background_ignore=False,
+                merge_similar_colors=False,
+                solid_base_enabled=False,
+                max_sampled_pixels=20000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=False,
+                contour_simplify_tolerance_px=0.2,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+            printable_hex = {color["hex"] for color in metadata["detected_colors"]}
+
+            self.assertEqual(metadata["relief_style"], "silhouette_outline")
+            self.assertIn("#000000", metadata["silhouette_outline_canvas_colors_hex"])
+            self.assertIn("#282828", metadata["silhouette_outline_canvas_colors_hex"])
+            self.assertNotIn("#000000", printable_hex)
+            self.assertNotIn("#282828", printable_hex)
+            self.assertEqual(printable_hex, {"#00DCFF", "#EB1423", "#FFFFFF"})
+            self.assertEqual(metadata["color_count_kept"], 3)
+            self.assertEqual(metadata["mesh_generation_mode"], "vector_contours")
+            self.assertEqual(metadata["vector_contour_effective_upsample_factors"], [3])
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertLess(report.bounding_box_mm[0], 110.0)
+            self.assertLess(report.bounding_box_mm[1], 110.0)
+
+    def test_silhouette_outline_with_solid_base_keeps_raised_ring_open(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "outline_ring.png"
+            stl_path = temp_path / "outline_ring.stl"
+            image = Image.new("RGB", (120, 120), (0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((20, 20, 100, 100), outline=(255, 0, 0), width=8)
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=120.0,
+                color_count=1,
+                relief_style="silhouette_outline",
+                solid_base_enabled=True,
+                merge_similar_colors=False,
+                max_sampled_pixels=20000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=False,
+                contour_simplify_tolerance_px=0.2,
+            )
+
+            stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            report = validate_stl_mesh(stl_path, stl_result.requested_backend, stl_result.actual_backend)
+            mesh = trimesh.load_mesh(stl_path, process=True)
+            base_area = self._horizontal_face_area(mesh, 2.0)
+            ring_area = self._horizontal_face_area(mesh, 2.8)
+
+            self.assertEqual(metadata["relief_style"], "silhouette_outline")
+            self.assertTrue(metadata["solid_base_enabled"])
+            self.assertTrue(report.watertight)
+            self.assertEqual(report.open_edge_count, 0)
+            self.assertEqual(report.overused_edge_count, 0)
+            self.assertEqual(report.non_manifold_edge_count, 0)
+            self.assertGreater(base_area, 10000.0)
+            self.assertGreater(ring_area, 0.0)
+            self.assertLess(ring_area, base_area * 0.25)
+
+    def test_auto_relief_style_selects_silhouette_for_black_canvas_line_art(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            image_path = temp_path / "black_canvas_outline_box.png"
+            stl_path = temp_path / "black_canvas_outline_box.stl"
+            image = Image.new("RGB", (160, 160), (1, 1, 1))
+            draw = ImageDraw.Draw(image)
+            cube_outline = [(35, 48), (80, 24), (125, 48), (125, 108), (80, 136), (35, 108), (35, 48)]
+            draw.line(cube_outline, fill=(225, 14, 18), width=5)
+            draw.line([(35, 48), (80, 78), (125, 48)], fill=(20, 167, 228), width=5)
+            draw.line([(80, 78), (80, 136)], fill=(225, 14, 18), width=5)
+            draw.rectangle((50, 78, 72, 112), outline=(20, 167, 228), width=4)
+            draw.rectangle((96, 78, 118, 112), outline=(20, 167, 228), width=4)
+            image.save(image_path)
+
+            config = replace(
+                load_config(Path("config/config.yaml")).filament_swap_relief,
+                width_mm=120.0,
+                color_count=2,
+                relief_style="auto",
+                solid_base_enabled=True,
+                merge_similar_colors=False,
+                max_sampled_pixels=30000,
+                min_region_area_px=1,
+                smooth_edges=False,
+                contour_smoothing_enabled=True,
+                contour_simplify_tolerance_px=0.35,
+            )
+
+            _stl_result, metadata = create_filament_swap_relief_stl(image_path, stl_path, config)
+            mesh = trimesh.load_mesh(stl_path, process=True)
+            base_area = self._horizontal_face_area(mesh, 2.0)
+            first_color_area = self._horizontal_face_area(mesh, 2.8)
+            second_color_area = self._horizontal_face_area(mesh, 3.6)
+
+            self.assertEqual(metadata["requested_relief_style"], "auto")
+            self.assertEqual(metadata["effective_relief_style"], "silhouette_outline")
+            self.assertEqual(metadata["relief_style"], "silhouette_outline")
+            self.assertIn("Auto artwork type selected Silhouette / Outline", " ".join(metadata["warnings"]))
+            self.assertTrue(metadata["solid_base_enabled"])
+            self.assertGreater(base_area, 10000.0)
+            self.assertGreater(first_color_area, 0.0)
+            self.assertGreater(second_color_area, 0.0)
+            self.assertLess(first_color_area, base_area * 0.20)
+            self.assertLess(second_color_area, base_area * 0.20)
+
+    def test_silhouette_outline_rejects_overfilled_closed_contours(self) -> None:
+        image = Image.new("1", (160, 160), 0)
+        draw = ImageDraw.Draw(image)
+        cube_outline = [(30, 45), (80, 20), (130, 45), (130, 105), (80, 140), (30, 105), (30, 45)]
+        draw.line(cube_outline, fill=1, width=5)
+        draw.line([(30, 45), (80, 75), (130, 45)], fill=1, width=5)
+        draw.line([(80, 75), (80, 140)], fill=1, width=5)
+        draw.rectangle((48, 80, 72, 112), outline=1, width=4)
+        draw.rectangle((98, 80, 122, 112), outline=1, width=4)
+        mask = np.asarray(image, dtype=bool)
+        mask_area = float(np.count_nonzero(mask))
+        config = replace(
+            load_config(Path("config/config.yaml")).filament_swap_relief,
+            relief_style="silhouette_outline",
+            contour_smoothing_enabled=True,
+            contour_simplify_tolerance_px=0.35,
+        )
+
+        with self.assertRaisesRegex(ValueError, "overfilled closed outline regions"):
+            _mask_to_quality_contour_geometry(mask, 1.0, 1.0, 160.0, config)
+
+        geometry, stats = _mask_to_geometry(mask, 1.0, 1.0, 160.0, config)
+
+        self.assertEqual(stats["contour_geometry_fallback_count"], 1)
+        self.assertLessEqual(float(geometry.area), mask_area * 1.10)
 
     def test_quality_contours_use_upsampled_curve_and_line_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -394,9 +566,9 @@ class FilamentSwapReliefTests(unittest.TestCase):
 
             self.assertEqual(metadata["relief_style"], "engraved_details")
             self.assertEqual(metadata["detected_colors"][0]["hex"], "#FAE00E")
-            self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 0.8)
+            self.assertEqual(metadata["detected_colors"][0]["assigned_height_mm"], 2.0)
             self.assertEqual(metadata["detected_colors"][1]["suggested_color_name"], "green")
-            self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.0)
+            self.assertEqual(metadata["detected_colors"][1]["assigned_height_mm"], 2.8)
 
     def test_repeated_rgb_and_lab_clustering_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -475,7 +647,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
 
             self.assertTrue(report.watertight)
             self.assertEqual([color["suggested_color_name"] for color in metadata["detected_colors"]], ["white", "black"])
-            self.assertEqual([color["assigned_height_mm"] for color in metadata["detected_colors"]], [0.8, 2.0])
+            self.assertEqual([color["assigned_height_mm"] for color in metadata["detected_colors"]], [2.0, 2.8])
 
     def test_stl_geometry_uses_aligned_heights(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -692,7 +864,7 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertTrue(status["generic_3mf_summary"]["generic_3mf_validation_passed"])
             self.assertEqual(status["generic_3mf_summary"]["generic_3mf_path"], str(paths.generic_3mf_path))
             self.assertEqual(status["filament_swap_summary"]["color_count_kept"], 3)
-            self.assertEqual(status["filament_swap_summary"]["swap_plan_summary"]["total_printed_layers"], 10)
+            self.assertEqual(status["filament_swap_summary"]["swap_plan_summary"]["total_printed_layers"], 18)
             self.assertIn("Do not rescale", " ".join(status["filament_swap_summary"]["swap_plan_summary"]["shop_ready_checklist"]))
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_enabled"])
             self.assertTrue(status["filament_swap_summary"]["generic_3mf_created"])
@@ -729,7 +901,8 @@ class FilamentSwapReliefTests(unittest.TestCase):
             self.assertIn("Quick print checklist", text_plan)
             self.assertIn("Do not rescale the STL or 3MF", text_plan)
             self.assertIn("Set the slicer to first layer", text_plan)
-            self.assertIn("CHANGE BEFORE LAYER 5", text_plan)
+            self.assertIn("CHANGE BEFORE LAYER 11", text_plan)
+            self.assertIn("CHANGE BEFORE LAYER 15", text_plan)
 
     def test_diagonal_height_contacts_are_repaired_before_stl_export(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

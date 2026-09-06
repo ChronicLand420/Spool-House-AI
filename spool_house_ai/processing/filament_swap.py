@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,11 @@ FILAMENT_SWAP_BACKEND = "filament_swap_heightfield"
 MAX_FILAMENT_CONTOUR_PIXELS = 6_500_000
 FILAMENT_VECTOR_SHELL_OVERLAP_MM = 0.01
 FILAMENT_VECTOR_POLYGON_REPAIR_FACTORS = (0.0, 0.02, 0.05, 0.1)
+FILAMENT_SILHOUETTE_DARK_LUMINANCE_MAX = 65.0
+FILAMENT_SILHOUETTE_DARK_CHANNEL_MAX = 110.0
+FILAMENT_SILHOUETTE_CONTOUR_UPSAMPLE_MIN = 3
+FILAMENT_SILHOUETTE_MAX_CONTOUR_AREA_RATIO = 1.35
+FILAMENT_AUTO_SILHOUETTE_MAX_PRINTABLE_FRACTION = 0.35
 
 
 def create_filament_swap_relief_stl(
@@ -66,7 +72,19 @@ def create_filament_swap_relief_stl(
             f"Merged {color_merge_metadata['merge_count']} similar color shade cluster(s) before height assignment."
         )
     background_label, background_confident, background_fraction = _detect_background_label(labels, valid_mask, config)
-    printable_labels, ignored_label, selection_warnings = _select_printable_labels(
+    requested_relief_style = config.relief_style
+    effective_relief_style, style_warnings = _resolve_effective_relief_style(
+        requested_relief_style,
+        centers,
+        labels,
+        valid_mask,
+        background_label,
+        background_confident,
+    )
+    if effective_relief_style != requested_relief_style:
+        config = replace(config, relief_style=effective_relief_style)
+    warnings.extend(style_warnings)
+    printable_labels, ignored_label, silhouette_canvas_labels, selection_warnings = _select_printable_labels(
         labels,
         centers,
         valid_mask,
@@ -104,6 +122,8 @@ def create_filament_swap_relief_stl(
         config,
         source_metadata=source_metadata,
     )
+    color_plan["requested_relief_style"] = requested_relief_style
+    color_plan["effective_relief_style"] = config.relief_style
     height_map, printability_report = enforce_printable_height_map(
         height_map,
         width_mm=config.width_mm,
@@ -161,6 +181,7 @@ def create_filament_swap_relief_stl(
         warnings.append(warning)
 
     ignored_color = _rgb_tuple(centers[ignored_label]) if ignored_label is not None else None
+    silhouette_canvas_colors = [_rgb_tuple(centers[label]) for label in silhouette_canvas_labels]
     metadata: dict[str, Any] = {
         "product": "Filament Swap Relief",
         "product_mode": "filament_swap_relief",
@@ -179,7 +200,11 @@ def create_filament_swap_relief_stl(
         "color_count_requested": int(config.color_count),
         "color_count_kept": len(color_rows),
         "color_order": config.color_order,
+        "requested_relief_style": requested_relief_style,
+        "effective_relief_style": config.relief_style,
         "relief_style": config.relief_style,
+        "silhouette_outline_canvas_labels": [int(label) for label in silhouette_canvas_labels],
+        "silhouette_outline_canvas_colors_hex": [_rgb_hex(color) for color in silhouette_canvas_colors],
         "palette_color_space": config.palette_color_space,
         "palette_random_seed": int(config.palette_random_seed),
         "merge_similar_colors": bool(config.merge_similar_colors),
@@ -717,6 +742,38 @@ def _detect_background_label(
     return label, fraction >= float(config.background_confidence_threshold), fraction
 
 
+def _resolve_effective_relief_style(
+    requested_style: str,
+    centers: np.ndarray,
+    labels: np.ndarray,
+    valid_mask: np.ndarray,
+    background_label: int | None,
+    background_confident: bool,
+) -> tuple[str, list[str]]:
+    if requested_style != "auto":
+        return requested_style, []
+
+    warnings: list[str] = []
+    total_valid_pixels = max(1, int(np.count_nonzero(valid_mask)))
+    background_is_dark_canvas = (
+        background_label is not None
+        and background_confident
+        and _is_silhouette_canvas_color(centers[background_label])
+    )
+    if background_is_dark_canvas:
+        printable_pixels = int(np.count_nonzero(valid_mask & (labels != background_label)))
+        printable_fraction = printable_pixels / total_valid_pixels
+        if printable_fraction <= FILAMENT_AUTO_SILHOUETTE_MAX_PRINTABLE_FRACTION:
+            warnings.append(
+                "Auto artwork type selected Silhouette / Outline because the image has a dark canvas "
+                f"and sparse colored strokes ({printable_fraction:.1%} printable coverage)."
+            )
+            return "silhouette_outline", warnings
+
+    warnings.append("Auto artwork type selected Stacked blocks for filled sign/logo artwork.")
+    return "stacked_blocks", warnings
+
+
 def _select_printable_labels(
     labels: np.ndarray,
     centers: np.ndarray,
@@ -725,7 +782,7 @@ def _select_printable_labels(
     background_label: int | None,
     background_confident: bool,
     background_fraction: float,
-) -> tuple[list[int], int | None, list[str]]:
+) -> tuple[list[int], int | None, list[int], list[str]]:
     warnings: list[str] = []
     counts = _label_counts(labels, valid_mask)
     ignored_label: int | None = None
@@ -738,9 +795,31 @@ def _select_printable_labels(
             "Background detection was uncertain; no color was ignored "
             f"(border fraction {background_fraction:.2f})."
         )
+
+    silhouette_canvas_labels: list[int] = []
+    if config.relief_style == "silhouette_outline" and len(candidates) > 1:
+        silhouette_canvas_labels = [
+            label
+            for label in candidates
+            if _is_silhouette_canvas_color(centers[label])
+        ]
+        remaining = [label for label in candidates if label not in set(silhouette_canvas_labels)]
+        if remaining:
+            candidates = remaining
+            if silhouette_canvas_labels:
+                warnings.append(
+                    "Silhouette / Outline ignored black-canvas color cluster(s): "
+                    + ", ".join(_rgb_hex(_rgb_tuple(centers[label])) for label in silhouette_canvas_labels)
+                    + "."
+                )
+        else:
+            warnings.append(
+                "Silhouette / Outline found only dark canvas-like clusters, so it kept the normal color selection."
+            )
+            silhouette_canvas_labels = []
     candidates.sort(key=lambda label: counts[label], reverse=True)
     selected = candidates[: max(1, int(config.color_count))]
-    return _order_printable_labels(selected, centers, counts, config), ignored_label, warnings
+    return _order_printable_labels(selected, centers, counts, config), ignored_label, silhouette_canvas_labels, warnings
 
 
 def _order_printable_labels(
@@ -751,7 +830,7 @@ def _order_printable_labels(
 ) -> list[int]:
     if not selected:
         return []
-    if config.relief_style == "stacked_blocks":
+    if config.relief_style in {"stacked_blocks", "silhouette_outline"}:
         base_label = max(selected, key=lambda label: (counts.get(label, 0), -label))
         detail_labels = [label for label in selected if label != base_label]
         detail_labels.sort(
@@ -765,6 +844,15 @@ def _order_printable_labels(
     ordered = list(selected)
     ordered.sort(key=lambda label: _luminance(centers[label]), reverse=config.color_order == "light_to_dark")
     return ordered
+
+
+def _is_silhouette_canvas_color(rgb: np.ndarray) -> bool:
+    """Treat near-black canvas/shadow clusters as non-printable in outline artwork."""
+    channels = np.asarray(rgb, dtype=np.float32)
+    return (
+        float(np.max(channels)) <= FILAMENT_SILHOUETTE_DARK_CHANNEL_MAX
+        and _luminance(channels) <= FILAMENT_SILHOUETTE_DARK_LUMINANCE_MAX
+    )
 
 
 def _height_map_for_labels(
@@ -1045,6 +1133,8 @@ def _vector_mesh_from_height_map(
                 if len(coords) < 3:
                     continue
                 a, b, c = [vertex(point[0], point[1], z) for point in coords]
+                if len({a, b, c}) < 3:
+                    continue
                 faces.append((a, b, c) if top else (c, b, a))
 
     def add_walls(geometry, low_z: float, high_z: float) -> None:
@@ -1309,6 +1399,15 @@ def _mask_to_quality_contour_geometry(
     geometry = _clean_geometry(geometry.intersection(bounds_clip))
     if geometry.is_empty:
         raise ValueError("Filament contour geometry became empty after clipping.")
+    if config.relief_style == "silhouette_outline":
+        mask_area = float(np.count_nonzero(mask)) * float(scale_x) * float(scale_y)
+        if mask_area > 0:
+            area_ratio = float(geometry.area) / mask_area
+            if area_ratio > FILAMENT_SILHOUETTE_MAX_CONTOUR_AREA_RATIO:
+                raise ValueError(
+                    "Silhouette / Outline contour geometry overfilled closed outline regions "
+                    f"(area ratio {area_ratio:.2f})."
+                )
     return geometry, {
         "contours": report.original_contour_count,
         "contour_geometry_fallback_count": 0,
@@ -1353,6 +1452,8 @@ def _mask_to_rectangle_run_geometry(
 
 def _effective_contour_upsample_factor(mask: np.ndarray, config: FilamentSwapReliefConfig) -> int:
     requested = max(1, int(config.contour_upsample_factor))
+    if config.relief_style == "silhouette_outline":
+        requested = max(requested, FILAMENT_SILHOUETTE_CONTOUR_UPSAMPLE_MIN)
     while requested > 1 and int(mask.size) * requested * requested > MAX_FILAMENT_CONTOUR_PIXELS:
         requested -= 1
     return requested
@@ -1574,6 +1675,8 @@ def _add_ring_walls(
         b_low = vertex(second[0], second[1], low_z)
         a_high = vertex(first[0], first[1], high_z)
         b_high = vertex(second[0], second[1], high_z)
+        if a_low == b_low or a_high == b_high:
+            continue
         faces.append((a_high, b_high, b_low))
         faces.append((a_high, b_low, a_low))
 

@@ -675,9 +675,9 @@ def _filament_swap_relief_config(
         "filament_swap_relief.island_connect_fallback",
     )
     relief_style = _choice(
-        value.get("relief_style", "stacked_blocks"),
-        "stacked_blocks",
-        {"stacked_blocks", "engraved_details"},
+        value.get("relief_style", "auto"),
+        "auto",
+        {"auto", "stacked_blocks", "silhouette_outline", "engraved_details"},
         "filament_swap_relief.relief_style",
     )
     mesh_style = _choice(
@@ -689,8 +689,8 @@ def _filament_swap_relief_config(
     return FilamentSwapReliefConfig(
         width_mm=float(value.get("width_mm", 120.0)),
         color_count=int(value.get("color_count", 3)),
-        base_height_mm=_positive_float(value.get("base_height_mm", 0.8), "filament_swap_relief.base_height_mm"),
-        layer_step_mm=_positive_float(value.get("layer_step_mm", 0.4), "filament_swap_relief.layer_step_mm"),
+        base_height_mm=_positive_float(value.get("base_height_mm", 2.0), "filament_swap_relief.base_height_mm"),
+        layer_step_mm=_positive_float(value.get("layer_step_mm", 0.8), "filament_swap_relief.layer_step_mm"),
         first_layer_height_mm=first_layer_height_mm,
         layer_height_mm=layer_height_mm,
         height_alignment_mode=height_alignment_mode,

@@ -128,8 +128,8 @@ printability:
 filament_swap_relief:
   width_mm: 120.0
   color_count: 3
-  base_height_mm: 0.8
-  layer_step_mm: 0.4
+  base_height_mm: 2.0
+  layer_step_mm: 0.8
   first_layer_height_mm: 0.20
   layer_height_mm: 0.20
   height_alignment_mode: snap_up
@@ -159,7 +159,9 @@ filament_swap_relief:
   island_connection_width_px: 1
   island_connect_fallback: remove
   island_report_components: true
-  relief_style: stacked_blocks
+  # auto: choose filled blocks or silhouette outline from artwork structure.
+  # stacked_blocks: filled sign/logo artwork; silhouette_outline: black-canvas outline art.
+  relief_style: auto
   mesh_style: vector_contours
   contour_upsample_factor: 2
   contour_simplify_tolerance_px: 0.35

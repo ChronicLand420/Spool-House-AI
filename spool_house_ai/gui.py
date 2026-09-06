@@ -1362,11 +1362,18 @@ class MainWindow(QMainWindow):
             self.config.filament_swap_relief.height_alignment_mode,
         )
         self.filament_relief_style = self._combo(
-            [("Stacked blocks", "stacked_blocks"), ("Engraved / recessed", "engraved_details")],
+            [
+                ("Auto (recommended)", "auto"),
+                ("Filled sign / blocks", "stacked_blocks"),
+                ("Colored outline / silhouette", "silhouette_outline"),
+                ("Engraved / recessed", "engraved_details"),
+            ],
             self.config.filament_swap_relief.relief_style,
         )
         self.filament_relief_style.setToolTip(
-            "Stacked blocks makes the largest color the base and raises other colors above it. "
+            "Auto picks Filled sign / blocks or Colored outline / silhouette from the artwork. "
+            "Filled sign / blocks makes the largest color the base and raises other colors above it. "
+            "Colored outline / silhouette treats black canvas as background and keeps colored strokes raised. "
             "Engraved / recessed keeps the legacy luminance-based order."
         )
         self.filament_palette_color_space = self._combo(
@@ -1486,6 +1493,27 @@ class MainWindow(QMainWindow):
         self.filament_solid_base.toggled.connect(self._refresh_filament_color_plan_estimate)
         self.filament_solid_base.toggled.connect(lambda *_args: self._update_print_ready_summary())
 
+        product_group = self._form_group("1. Choose Product", [("Product", self.product_mode)])
+        self.product_group = product_group
+        self.wall_art_note = QLabel("Wall Art uses cleanup presets and outline/detail handling for printable reliefs.")
+        self.wall_art_note.setObjectName("presetDescription")
+        self.wall_art_note.setWordWrap(True)
+        product_group.layout().addRow(self.wall_art_note)
+        self.lithophane_note = QLabel("Lithophane uses photo brightness for thickness. Cleanup presets are ignored.")
+        self.lithophane_note.setObjectName("presetDescription")
+        self.lithophane_note.setWordWrap(True)
+        product_group.layout().addRow(self.lithophane_note)
+        self.filament_swap_note = QLabel(
+            "Filament Swap Relief uses detected colors as stepped heights for manual filament swaps. "
+            "Use Auto for most artwork, Filled sign / blocks for filled logos, and Colored outline / silhouette "
+            "for black-canvas colored line art. "
+            "In Orca Preview, lower swap layers can look filled underneath later colors; final top color follows the plan."
+        )
+        self.filament_swap_note.setObjectName("presetDescription")
+        self.filament_swap_note.setWordWrap(True)
+        product_group.layout().addRow(self.filament_swap_note)
+        layout.addWidget(product_group)
+
         preset_group = self._form_group("Artwork Recommendation", [("Artwork style", self.cleanup_preset)])
         self.preset_help = QLabel("")
         self.preset_help.setObjectName("presetDescription")
@@ -1506,26 +1534,34 @@ class MainWindow(QMainWindow):
         preset_group.layout().addRow("", self.apply_recommendation_button)
         self.preset_group = preset_group
         layout.addWidget(preset_group)
-        product_group = self._form_group(
-            "Print Style",
+
+        self.wall_art_quick_group = self._form_group(
+            "Wall Art Setup",
             [
-                ("Product", self.product_mode),
                 ("Detail handling", self.detail_mode),
                 ("Output size mm", self.output_scale),
             ],
         )
-        self.lithophane_note = QLabel("Lithophane uses photo brightness for thickness. Cleanup presets are ignored.")
-        self.lithophane_note.setObjectName("presetDescription")
-        self.lithophane_note.setWordWrap(True)
-        product_group.layout().addRow(self.lithophane_note)
-        self.filament_swap_note = QLabel(
-            "Filament Swap Relief uses detected colors as stepped heights for manual filament swaps. "
-            "Cleanup presets, detail handling, and STL backend options are ignored."
+        layout.addWidget(self.wall_art_quick_group)
+
+        self.filament_quick_group = self._form_group(
+            "Filament Relief Setup",
+            [
+                ("Width mm", self.filament_width),
+                ("Colors", self.filament_color_count),
+                ("Detail", self.filament_detail_quality),
+                ("Artwork type", self.filament_relief_style),
+                ("Base / first color mm", self.filament_base_height),
+                ("Each color layer mm", self.filament_layer_step),
+                ("First layer mm", self.filament_first_layer_height),
+                ("Print layer mm", self.filament_normal_layer_height),
+            ],
         )
-        self.filament_swap_note.setObjectName("presetDescription")
-        self.filament_swap_note.setWordWrap(True)
-        product_group.layout().addRow(self.filament_swap_note)
-        layout.addWidget(product_group)
+        self.filament_quick_group.layout().addRow(self.filament_solid_base)
+        self.filament_quick_group.layout().addRow(self.filament_merge_similar_colors)
+        self.filament_quick_group.layout().addRow(self.filament_auto_background_ignore)
+        self.filament_quick_group.layout().addRow(self.filament_orca_project_3mf)
+        layout.addWidget(self.filament_quick_group)
 
         print_safe_quick_group = QGroupBox("Print-Safe Cleanup")
         print_safe_quick_group.setObjectName("settingsGroup")
@@ -1541,25 +1577,6 @@ class MainWindow(QMainWindow):
         print_safe_layout.addWidget(self.printability_printer_aware_defaults)
         print_safe_layout.addWidget(self.apply_printer_defaults_button)
         layout.addWidget(print_safe_quick_group)
-
-        self.filament_quick_group = self._form_group(
-            "Filament Relief Setup",
-            [
-                ("Width mm", self.filament_width),
-                ("Colors", self.filament_color_count),
-                ("Detail", self.filament_detail_quality),
-                ("Relief", self.filament_relief_style),
-                ("First color mm", self.filament_base_height),
-                ("Color layer mm", self.filament_layer_step),
-                ("First layer mm", self.filament_first_layer_height),
-                ("Print layer mm", self.filament_normal_layer_height),
-            ],
-        )
-        self.filament_quick_group.layout().addRow(self.filament_solid_base)
-        self.filament_quick_group.layout().addRow(self.filament_merge_similar_colors)
-        self.filament_quick_group.layout().addRow(self.filament_auto_background_ignore)
-        self.filament_quick_group.layout().addRow(self.filament_orca_project_3mf)
-        layout.addWidget(self.filament_quick_group)
 
         advanced_section = CollapsibleSection("Fine-Tune / Developer Settings", expanded=False)
         self.advanced_section = advanced_section
@@ -1810,10 +1827,14 @@ class MainWindow(QMainWindow):
             self.lithophane_note.setVisible(is_lithophane)
         if hasattr(self, "filament_swap_note"):
             self.filament_swap_note.setVisible(is_filament_swap)
+        if hasattr(self, "wall_art_note"):
+            self.wall_art_note.setVisible(not is_special_heightfield)
         if hasattr(self, "lithophane_group"):
             self.lithophane_group.setVisible(is_lithophane)
         if hasattr(self, "preset_group"):
             self.preset_group.setVisible(not is_special_heightfield)
+        if hasattr(self, "wall_art_quick_group"):
+            self.wall_art_quick_group.setVisible(not is_special_heightfield)
         if hasattr(self, "filament_quick_group"):
             self.filament_quick_group.setVisible(is_filament_swap)
         if hasattr(self, "filament_group"):
@@ -1886,6 +1907,10 @@ class MainWindow(QMainWindow):
         for control in filament_controls:
             if control is not None:
                 control.setEnabled(is_filament_swap)
+        if hasattr(self, "product_group"):
+            show_wall_art_controls = not is_special_heightfield
+            self._set_form_field_visible(self.wall_art_quick_group, self.detail_mode, show_wall_art_controls)
+            self._set_form_field_visible(self.wall_art_quick_group, self.output_scale, show_wall_art_controls)
         if hasattr(self, "filament_plan_table"):
             self.filament_plan_table.setEnabled(is_filament_swap)
         self._update_filament_policy_controls()
@@ -1936,8 +1961,8 @@ class MainWindow(QMainWindow):
                 height_alignment_mode=self._combo_value(self.filament_alignment_mode),
                 height_alignment_tolerance_mm=self.config.filament_swap_relief.height_alignment_tolerance_mm,
                 solid_base_enabled=self.filament_solid_base.isChecked(),
-                solid_base_thickness_mm=self.config.filament_swap_relief.solid_base_thickness_mm,
-                solid_base_color_band_height_mm=self.config.filament_swap_relief.solid_base_color_band_height_mm,
+                solid_base_thickness_mm=self.filament_base_height.value(),
+                solid_base_color_band_height_mm=self.filament_layer_step.value(),
                 palette_order="estimate",
             )
         except Exception as error:
@@ -2100,6 +2125,14 @@ class MainWindow(QMainWindow):
             label.setObjectName("formLabel")
             form.addRow(label, widget)
         return group
+
+    def _set_form_field_visible(self, group: QGroupBox, widget: QWidget, visible: bool) -> None:
+        layout = group.layout()
+        if isinstance(layout, QFormLayout):
+            label = layout.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+        widget.setVisible(visible)
 
     def _backend_combo(self) -> QComboBox:
         combo = QComboBox()
@@ -2322,6 +2355,8 @@ class MainWindow(QMainWindow):
             auto_background_ignore=self.filament_auto_background_ignore.isChecked(),
             merge_similar_colors=self.filament_merge_similar_colors.isChecked(),
             solid_base_enabled=self.filament_solid_base.isChecked(),
+            solid_base_thickness_mm=self.filament_base_height.value(),
+            solid_base_color_band_height_mm=self.filament_layer_step.value(),
             export_orca_project_3mf=self.filament_orca_project_3mf.isChecked(),
             min_region_area_px=self.filament_min_region_area.value(),
             palette_color_space=self._combo_value(self.filament_palette_color_space),
