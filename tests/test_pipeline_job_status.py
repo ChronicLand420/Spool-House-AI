@@ -109,6 +109,58 @@ class PipelineJobStatusTests(unittest.TestCase):
             self.assertIn("Manual filament-change instructions are stored separately", summary)
             self.assertIn("Artwork Cleanup", summary)
 
+    def test_pipeline_saves_negative_input_without_modifying_source_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "negative_test.png"
+            output_dir = temp_path / "output"
+            log_dir = temp_path / "logs"
+            output_dir.mkdir()
+            log_dir.mkdir()
+
+            image = Image.new("RGB", (120, 90), "black")
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((30, 20, 90, 70), fill="white")
+            image.save(input_path)
+
+            config = load_config(Path("config/config.yaml"))
+            config = replace(
+                config,
+                input_dir=temp_path,
+                output_dir=output_dir,
+                log_dir=log_dir,
+                pipeline=replace(config.pipeline, invert_input_enabled=True),
+            )
+            logger = logging.getLogger("spool_house_ai.tests.negative_input")
+            logger.handlers.clear()
+            logger.addHandler(logging.NullHandler())
+
+            self.assertTrue(ImagePipeline(config, logger).process(input_path))
+
+            paths = build_job_output_paths(output_dir, input_path)
+            self.assertTrue(paths.source_copy_path.exists())
+            self.assertTrue(paths.preprocessed_input_path.exists())
+            with Image.open(paths.source_copy_path) as copied_source:
+                source_rgb = copied_source.convert("RGB")
+                self.assertEqual(source_rgb.getpixel((0, 0)), (0, 0, 0))
+                self.assertEqual(source_rgb.getpixel((60, 45)), (255, 255, 255))
+            with Image.open(paths.preprocessed_input_path) as negative_input:
+                negative_rgb = negative_input.convert("RGB")
+                self.assertEqual(negative_rgb.getpixel((0, 0)), (255, 255, 255))
+                self.assertEqual(negative_rgb.getpixel((60, 45)), (0, 0, 0))
+
+            status = json.loads(paths.job_status_path.read_text(encoding="utf-8"))
+            self.assertEqual(status["preprocessed_input_path"], str(paths.preprocessed_input_path))
+            self.assertTrue(status["input_preprocessing"]["invert_input_enabled"])
+            self.assertEqual(status["input_preprocessing"]["processing_input_path"], str(paths.preprocessed_input_path))
+            self.assertTrue(status["settings_used"]["pipeline"]["invert_input_enabled"])
+            self.assertTrue(status["dimensions"]["invert_input_enabled"])
+            settings_text = paths.settings_path.read_text(encoding="utf-8")
+            self.assertIn("invert_input_enabled: true", settings_text)
+            summary = paths.job_summary_path.read_text(encoding="utf-8")
+            self.assertIn("Negative before processing: `True`", summary)
+            self.assertIn(str(paths.preprocessed_input_path), summary)
+
 
 if __name__ == "__main__":
     unittest.main()

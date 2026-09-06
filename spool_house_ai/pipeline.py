@@ -9,7 +9,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from PIL import UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from spool_house_ai.config import AppConfig
 from spool_house_ai.output_paths import JobOutputPaths, build_job_output_paths
@@ -103,17 +103,34 @@ class ImagePipeline:
             message = f"Could not copy source image into job package: {error}"
             warnings.append(message)
             self.logger.warning(message)
-        _emit(stage_callback, "Intake Room", "done", "Image accepted", image_path)
+        processing_image_path = image_path
+        try:
+            processing_image_path = _prepare_pipeline_input(image_path, paths, self.config, self.logger)
+        except (UnidentifiedImageError, OSError) as error:
+            failures.append(f"Skipped invalid image during input preprocessing: {error}")
+            self.logger.warning("Skipped invalid image %s during input preprocessing: %s", image_path, error)
+            _emit(stage_callback, "Intake Room", "failed", "Invalid image", None)
+            _write_job_settings(settings_path, self.config)
+            write_job_status()
+            return False
+        except Exception as error:
+            failures.append(f"Failed to preprocess input image: {error}")
+            self.logger.exception("Failed to preprocess input image: %s", image_path)
+            _emit(stage_callback, "Intake Room", "failed", "Input preprocessing failed", None)
+            _write_job_settings(settings_path, self.config)
+            write_job_status()
+            return False
+        _emit(stage_callback, "Intake Room", "done", "Image accepted", processing_image_path)
 
         if self.config.stl.product_mode == "lithophane":
-            _emit(stage_callback, "Cleanup Lab", "done", "Cleanup skipped for lithophane", image_path)
-            _emit(stage_callback, "Detail Analyzer", "active", "Sampling grayscale brightness", image_path)
+            _emit(stage_callback, "Cleanup Lab", "done", "Cleanup skipped for lithophane", processing_image_path)
+            _emit(stage_callback, "Detail Analyzer", "active", "Sampling grayscale brightness", processing_image_path)
             stl_created = False
             processed_lithophane_path = paths.previews_dir / f"{image_path.stem}_lithophane_processed.png"
             try:
-                _emit(stage_callback, "Mesh Forge", "active", "Generating lithophane heightfield", image_path)
+                _emit(stage_callback, "Mesh Forge", "active", "Generating lithophane heightfield", processing_image_path)
                 stl_result, lithophane_metadata = create_lithophane_stl(
-                    image_path,
+                    processing_image_path,
                     stl_path,
                     self.config.stl,
                     preview_path=preview_path,
@@ -177,13 +194,13 @@ class ImagePipeline:
             return stl_created
 
         if self.config.stl.product_mode == "filament_swap_relief":
-            _emit(stage_callback, "Cleanup Lab", "done", "Cleanup presets ignored for filament swaps", image_path)
-            _emit(stage_callback, "Detail Analyzer", "active", "Detecting printable color groups", image_path)
+            _emit(stage_callback, "Cleanup Lab", "done", "Cleanup presets ignored for filament swaps", processing_image_path)
+            _emit(stage_callback, "Detail Analyzer", "active", "Detecting printable color groups", processing_image_path)
             stl_created = False
             try:
-                _emit(stage_callback, "Mesh Forge", "active", "Generating filament swap heightfield", image_path)
+                _emit(stage_callback, "Mesh Forge", "active", "Generating filament swap heightfield", processing_image_path)
                 stl_result, filament_swap_metadata = create_filament_swap_relief_stl(
-                    image_path,
+                    processing_image_path,
                     stl_path,
                     self.config.filament_swap_relief,
                     preview_path=preview_path,
@@ -270,7 +287,7 @@ class ImagePipeline:
 
         try:
             remove_background(
-                image_path,
+                processing_image_path,
                 cleaned_png_path,
                 enabled=self.config.pipeline.background_removal_enabled,
             )
@@ -466,6 +483,40 @@ def _append_printability_warnings(warnings: list[str], report: dict[str, Any] | 
             warnings.append(message)
 
 
+def _prepare_pipeline_input(
+    image_path: Path,
+    paths: JobOutputPaths,
+    config: AppConfig,
+    logger: logging.Logger,
+) -> Path:
+    if not config.pipeline.invert_input_enabled:
+        return image_path
+    _save_negative_input(image_path, paths.preprocessed_input_path)
+    message = f"Negative input image saved: {paths.preprocessed_input_path}"
+    logger.info(message)
+    return paths.preprocessed_input_path
+
+
+def _save_negative_input(source_path: Path, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_path) as image:
+        if "A" in image.getbands() or "transparency" in image.info:
+            rgba = image.convert("RGBA")
+            red, green, blue, alpha = rgba.split()
+            inverted = Image.merge(
+                "RGBA",
+                (
+                    ImageOps.invert(red),
+                    ImageOps.invert(green),
+                    ImageOps.invert(blue),
+                    alpha,
+                ),
+            )
+        else:
+            inverted = ImageOps.invert(image.convert("RGB"))
+        inverted.save(output_path)
+
+
 def _log_generic_3mf(logger: logging.Logger, stl_result: StlCreationResult | None, paths: JobOutputPaths) -> None:
     metadata = (stl_result.generic_3mf_metadata if stl_result else {}) or {}
     if metadata.get("generic_3mf_created"):
@@ -476,6 +527,9 @@ def _log_generic_3mf(logger: logging.Logger, stl_result: StlCreationResult | Non
 
 def _write_job_settings(path: Path, config: AppConfig) -> None:
     lines = [
+        "pipeline:",
+        f"  invert_input_enabled: {str(config.pipeline.invert_input_enabled).lower()}",
+        f"  background_removal_enabled: {str(config.pipeline.background_removal_enabled).lower()}",
         "product:",
         f"  stl_backend: {config.stl.stl_backend}",
         f"  product_mode: {config.stl.product_mode}",
@@ -606,6 +660,11 @@ def _write_job_status(
     svg_applicable = config.stl.product_mode not in {"lithophane", "filament_swap_relief"}
     generic_3mf_summary = _generic_3mf_status_summary(stl_result, lithophane_metadata, filament_swap_metadata)
     printability_summary = _printability_status_summary(stl_result, lithophane_metadata, filament_swap_metadata)
+    preprocessed_input_path = (
+        str(paths.preprocessed_input_path)
+        if config.pipeline.invert_input_enabled and paths.preprocessed_input_path.exists()
+        else ""
+    )
     payload = {
         "app_version": _load_app_version(config.project_root),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -623,6 +682,12 @@ def _write_job_status(
         "previews_folder_path": str(paths.previews_dir),
         "reports_folder_path": str(paths.reports_dir),
         "source_copy_path": str(paths.source_copy_path),
+        "preprocessed_input_path": preprocessed_input_path,
+        "input_preprocessing": {
+            "invert_input_enabled": config.pipeline.invert_input_enabled,
+            "preprocessed_input_path": preprocessed_input_path,
+            "processing_input_path": preprocessed_input_path or str(image_path),
+        },
         "cleaned_png_path": str(paths.cleaned_png_path),
         "silhouette_png_path": str(paths.silhouette_png_path),
         "body_mask_path": str(paths.body_mask_path),
@@ -659,6 +724,7 @@ def _write_job_status(
         "detail_mode": config.stl.detail_mode,
         "dimensions": {
             "output_scale_mm": config.stl.output_scale_mm,
+            "invert_input_enabled": config.pipeline.invert_input_enabled,
             "base_height_mm": config.stl.base_height_mm,
             "extrusion_height_mm": config.stl.extrusion_height_mm,
             "detail_height_mm": config.stl.detail_height_mm,
@@ -761,6 +827,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         "",
         "## Job",
         f"- Input: `{status.get('input_file_path', '')}`",
+        f"- Negative before processing: `{(status.get('input_preprocessing') or {}).get('invert_input_enabled', False)}`",
         f"- Output root: `{status.get('output_root_path', '')}`",
         f"- Output folder: `{status.get('output_folder_path', '')}`",
         f"- Cleanup preset: `{artifact.get('cleanup_preset') or (status.get('settings_used') or {}).get('silhouette', {}).get('cleanup_preset', '')}`",
@@ -778,6 +845,7 @@ def _write_job_summary(path: Path, status: dict[str, Any]) -> None:
         "",
         "## Files",
         f"- Source copy: `{status.get('source_copy_path', '')}`",
+        f"- Negative input copy: `{status.get('preprocessed_input_path', '')}`",
         f"- SVG: `{status.get('svg_path', '')}`",
         f"- Review SVG: `{status.get('review_svg_path', '')}`",
         f"- STL: `{status.get('stl_path', '')}`",

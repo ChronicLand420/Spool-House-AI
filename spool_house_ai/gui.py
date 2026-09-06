@@ -1305,6 +1305,12 @@ class MainWindow(QMainWindow):
         self.preserve_islands_near_body.setChecked(self.config.silhouette.preserve_islands_near_body)
         self.background_removal = QCheckBox("Remove background")
         self.background_removal.setChecked(self.config.pipeline.background_removal_enabled)
+        self.invert_input = QCheckBox("Negative image before processing")
+        self.invert_input.setToolTip(
+            "Invert the working copy before cleanup and color detection. "
+            "Helpful for white or bright artwork on a black background."
+        )
+        self.invert_input.setChecked(self.config.pipeline.invert_input_enabled)
         self.keychain_hole = QCheckBox("Add keychain hole")
         self.keychain_hole.setChecked(self.config.stl.add_keychain_hole)
         self.keychain_diameter = self._double_spin(1.0, 20.0, self.config.stl.keychain_hole_diameter_mm)
@@ -1495,6 +1501,7 @@ class MainWindow(QMainWindow):
 
         product_group = self._form_group("1. Choose Product", [("Product", self.product_mode)])
         self.product_group = product_group
+        product_group.layout().addRow(self.invert_input)
         self.wall_art_note = QLabel("Wall Art uses cleanup presets and outline/detail handling for printable reliefs.")
         self.wall_art_note.setObjectName("presetDescription")
         self.wall_art_note.setWordWrap(True)
@@ -2268,6 +2275,7 @@ class MainWindow(QMainWindow):
             self.config.pipeline,
             product_mode=product_mode,
             detail_mode=detail_mode,
+            invert_input_enabled=self.invert_input.isChecked(),
             background_removal_enabled=self.background_removal.isChecked(),
         )
         silhouette = replace(

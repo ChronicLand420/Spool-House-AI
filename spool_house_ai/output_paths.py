@@ -15,6 +15,7 @@ class JobOutputPaths:
     previews_dir: Path
     reports_dir: Path
     source_copy_path: Path
+    preprocessed_input_path: Path
     cleaned_png_path: Path
     silhouette_png_path: Path
     body_mask_path: Path
@@ -77,6 +78,7 @@ def build_job_output_paths_for_stem(output_root: Path, stem: str, source_filenam
         previews_dir=previews_dir,
         reports_dir=reports_dir,
         source_copy_path=source_dir / source_name,
+        preprocessed_input_path=source_dir / f"{stem}_negative.png",
         cleaned_png_path=previews_dir / f"{stem}_cleaned.png",
         silhouette_png_path=previews_dir / f"{stem}_silhouette.png",
         body_mask_path=previews_dir / f"{stem}_body_mask.png",

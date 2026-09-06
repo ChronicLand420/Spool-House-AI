@@ -14,6 +14,7 @@ except ImportError:
 class PipelineConfig:
     product_mode: str
     detail_mode: str
+    invert_input_enabled: bool
     background_removal_enabled: bool
     debug: bool
 
@@ -312,6 +313,7 @@ def _pipeline_config(value: dict[str, Any]) -> PipelineConfig:
     return PipelineConfig(
         product_mode=str(value.get("product_mode", "flat_relief")),
         detail_mode=str(value.get("detail_mode", "preserve_holes")),
+        invert_input_enabled=bool(value.get("invert_input_enabled", False)),
         background_removal_enabled=bool(value.get("background_removal_enabled", False)),
         debug=bool(value.get("debug", False)),
     )

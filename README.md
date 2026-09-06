@@ -354,6 +354,8 @@ For Filament Swap Relief jobs, SVG files are also not created in this first vers
 
 The default output root is `output/`. In the GUI, use `Settings` -> `Output Folder` to choose a different root folder. New jobs still use the same per-image pattern, `<selected output root>/<input stem>/`, and then place files into the `source/`, `svg/`, `stl/`, `3mf/`, `previews/`, and `reports/` subfolders. CLI runs continue to use `config/config.yaml` unless you change that config directly.
 
+Use `Negative image before processing` for bright artwork on a dark background. The original source copy remains untouched in `source/`, and the negative working copy is saved as `source/<stem>_negative.png` before cleanup, color detection, STL, and 3MF generation.
+
 The contour debug preview uses:
 
 - dark gray: kept printable mask
@@ -370,6 +372,7 @@ Edit `config/config.yaml` for defaults:
 pipeline:
   product_mode: flat_relief
   detail_mode: preserve_holes
+  invert_input_enabled: false
   background_removal_enabled: false
 
 silhouette:

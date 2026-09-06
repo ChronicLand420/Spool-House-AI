@@ -6,6 +6,7 @@ paths:
 pipeline:
   product_mode: flat_relief
   detail_mode: preserve_holes
+  invert_input_enabled: false
   background_removal_enabled: false
   debug: false
 

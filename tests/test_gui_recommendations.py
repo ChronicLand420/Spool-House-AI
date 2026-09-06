@@ -39,6 +39,7 @@ class GuiRecommendationTests(unittest.TestCase):
             self.assertIn("Open 3MF", button_texts)
             self.assertTrue(hasattr(window, "recommendation_summary"))
             self.assertTrue(hasattr(window, "apply_recommendation_button"))
+            self.assertTrue(hasattr(window, "invert_input"))
         finally:
             window.close()
 
@@ -175,6 +176,7 @@ class GuiRecommendationTests(unittest.TestCase):
             checkboxes = window.findChildren(QCheckBox)
             visible_text = " ".join(child.text() for child in [*buttons, *checkboxes])
             self.assertIn("Print-safe cleanup", visible_text)
+            self.assertIn("Negative image before processing", visible_text)
             self.assertIn("Use printer/nozzle defaults", visible_text)
             self.assertIn("Use Printer Defaults", visible_text)
             self.assertNotIn("Enforce minimum printable geometry", visible_text)
@@ -216,6 +218,19 @@ class GuiRecommendationTests(unittest.TestCase):
             self.assertAlmostEqual(config.printability.minimum_component_dimension_mm, 0.9)
             self.assertEqual(config.stl.printability, config.printability)
             self.assertEqual(config.filament_swap_relief.printability, config.printability)
+        finally:
+            window.close()
+
+    def test_negative_input_toggle_feeds_pipeline_config(self) -> None:
+        window = MainWindow()
+        try:
+            self.assertFalse(window.config.pipeline.invert_input_enabled)
+            window.invert_input.setChecked(True)
+
+            config = window._config_from_controls()
+
+            self.assertTrue(config.pipeline.invert_input_enabled)
+            self.assertFalse(config.pipeline.background_removal_enabled)
         finally:
             window.close()
 
