@@ -13,7 +13,12 @@ from spool_house_ai.config import apply_cleanup_preset, load_config
 from spool_house_ai.processing.analysis import analyze_image
 from spool_house_ai.processing.geometry import extract_vector_contours
 from spool_house_ai.processing.generic_3mf import validate_generic_3mf
-from spool_house_ai.processing.stl import create_relief_stl, validate_stl_mesh
+from spool_house_ai.processing.stl import (
+    _extrude_polygon_parts,
+    _polish_vector_extrusion_polygons,
+    create_relief_stl,
+    validate_stl_mesh,
+)
 from spool_house_ai.test_mode import create_real_world_geometry_test_image
 
 
@@ -250,6 +255,41 @@ class GeometryRegressionTests(unittest.TestCase):
             self.assertEqual(report.non_manifold_edge_count, 0)
             self.assertEqual(report.failures, [])
 
+    def test_vector_side_wall_polish_removes_subpixel_trace_jitter(self) -> None:
+        from shapely.geometry import Polygon
+
+        outer = self._jittered_rectangle(0.0, 0.0, 120.0, 60.0, samples=80, amplitude=0.006)
+        hole = self._jittered_rectangle(42.0, 18.0, 72.0, 38.0, samples=24, amplitude=0.004)
+        polygon = Polygon(outer, [hole])
+
+        self.assertTrue(polygon.is_valid)
+        before_points = self._polygon_ring_point_count(polygon)
+
+        polished = _polish_vector_extrusion_polygons([polygon], scale_mm_per_pixel=0.05)
+
+        self.assertEqual(len(polished), 1)
+        polished_polygon = polished[0]
+        after_points = self._polygon_ring_point_count(polished_polygon)
+        self.assertLess(after_points, before_points * 0.35)
+        self.assertEqual(len(polished_polygon.interiors), 1)
+        self.assertAlmostEqual(float(polished_polygon.area), float(polygon.area), delta=float(polygon.area) * 0.01)
+        self.assertLessEqual(
+            max(abs(a - b) for a, b in zip(polished_polygon.bounds, polygon.bounds, strict=True)),
+            0.13,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stl_path = Path(temp_dir) / "polished_vector_side_walls.stl"
+            mesh = _extrude_polygon_parts(polished, extrusion_height=2.0)
+            mesh.export(stl_path)
+            report = validate_stl_mesh(stl_path)
+
+        self.assertTrue(report.watertight)
+        self.assertEqual(report.open_edge_count, 0)
+        self.assertEqual(report.overused_edge_count, 0)
+        self.assertEqual(report.non_manifold_edge_count, 0)
+        self.assertEqual(report.failures, [])
+
     def test_nested_contours_use_hierarchy_parity_for_holes(self) -> None:
         mask = np.zeros((80, 80), dtype=bool)
         mask[5:75, 5:75] = True
@@ -412,6 +452,35 @@ class GeometryRegressionTests(unittest.TestCase):
         for x, y in [(16, 16), (392, 18), (398, 252), (24, 258), (210, 18)]:
             draw.rectangle((x, y, x + 2, y + 2), fill=(20, 20, 20, 255))
         image.save(path)
+
+    @staticmethod
+    def _jittered_rectangle(
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+        *,
+        samples: int,
+        amplitude: float,
+    ) -> list[tuple[float, float]]:
+        points: list[tuple[float, float]] = []
+        for index in range(samples + 1):
+            t = index / samples
+            points.append((x0 + (x1 - x0) * t, y0 + ((-1) ** index) * amplitude))
+        for index in range(1, samples + 1):
+            t = index / samples
+            points.append((x1 + ((-1) ** index) * amplitude, y0 + (y1 - y0) * t))
+        for index in range(1, samples + 1):
+            t = index / samples
+            points.append((x1 - (x1 - x0) * t, y1 + ((-1) ** index) * amplitude))
+        for index in range(1, samples):
+            t = index / samples
+            points.append((x0 + ((-1) ** index) * amplitude, y1 - (y1 - y0) * t))
+        return points
+
+    @staticmethod
+    def _polygon_ring_point_count(polygon) -> int:
+        return len(polygon.exterior.coords) + sum(len(ring.coords) for ring in polygon.interiors)
 
 
 if __name__ == "__main__":

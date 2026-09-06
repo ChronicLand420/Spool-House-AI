@@ -25,6 +25,11 @@ from spool_house_ai.processing.printability import (
     validate_lithophane_printability,
 )
 
+_VECTOR_SIDE_WALL_POLISH_MIN_TOLERANCE_MM = 0.015
+_VECTOR_SIDE_WALL_POLISH_MAX_TOLERANCE_MM = 0.08
+_VECTOR_SIDE_WALL_POLISH_SCALE_FACTOR = 1.25
+_VECTOR_SIDE_WALL_POLISH_MAX_AREA_CHANGE_RATIO = 0.01
+
 
 @dataclass(frozen=True)
 class MeshReport:
@@ -472,9 +477,10 @@ def _create_vector_extrusion_stl(
     )
     if not merged_polygons:
         raise ValueError("Minimum printable geometry cleanup removed every vector component.")
-    mesh = _extrude_polygon_parts(merged_polygons, extrusion_height)
+    extrudable_polygons = _polish_vector_extrusion_polygons(merged_polygons, scale)
+    mesh = _extrude_polygon_parts(extrudable_polygons, extrusion_height)
     if not _vector_mesh_is_safe(mesh):
-        repaired_polygons = _repair_polygon_parts_for_extrusion(merged_polygons, scale)
+        repaired_polygons = _repair_polygon_parts_for_extrusion(extrudable_polygons, scale)
         repaired_mesh = _extrude_polygon_parts(repaired_polygons, extrusion_height)
         if _vector_mesh_is_safe(repaired_mesh):
             mesh = repaired_mesh
@@ -500,6 +506,76 @@ def _extrude_polygon_parts(polygons: list, extrusion_height: float) -> trimesh.T
     if not meshes:
         raise ValueError("Vector extrusion did not create any meshes.")
     return trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+
+
+def _polish_vector_extrusion_polygons(polygons: list, scale_mm_per_pixel: float) -> list:
+    """Remove sub-printable trace jitter before building visible vertical side walls."""
+    tolerance = _vector_side_wall_polish_tolerance(scale_mm_per_pixel)
+    if tolerance <= 0:
+        return polygons
+
+    polished = []
+    for polygon in polygons:
+        candidate = polygon.simplify(tolerance, preserve_topology=True)
+        if not candidate.is_valid:
+            candidate = candidate.buffer(0)
+        candidate_parts = _valid_polygon_parts(candidate)
+        if _polished_polygon_parts_are_safe([polygon], candidate_parts, tolerance):
+            polished.extend(candidate_parts)
+        else:
+            polished.append(polygon)
+    return polished
+
+
+def _vector_side_wall_polish_tolerance(scale_mm_per_pixel: float) -> float:
+    if scale_mm_per_pixel <= 0:
+        return 0.0
+    tolerance = float(scale_mm_per_pixel) * _VECTOR_SIDE_WALL_POLISH_SCALE_FACTOR
+    return min(
+        max(tolerance, _VECTOR_SIDE_WALL_POLISH_MIN_TOLERANCE_MM),
+        _VECTOR_SIDE_WALL_POLISH_MAX_TOLERANCE_MM,
+    )
+
+
+def _polished_polygon_parts_are_safe(original_parts: list, candidate_parts: list, tolerance: float) -> bool:
+    if not candidate_parts or len(candidate_parts) != len(original_parts):
+        return False
+    if _polygon_hole_count(candidate_parts) != _polygon_hole_count(original_parts):
+        return False
+
+    original_area = _polygon_area(original_parts)
+    candidate_area = _polygon_area(candidate_parts)
+    if original_area <= 0 or candidate_area <= 0:
+        return False
+
+    max_area_delta = max(
+        original_area * _VECTOR_SIDE_WALL_POLISH_MAX_AREA_CHANGE_RATIO,
+        tolerance * tolerance * 4,
+    )
+    if abs(original_area - candidate_area) > max_area_delta:
+        return False
+
+    max_bounds_delta = max(tolerance * 2.5, 0.05)
+    for original, candidate in zip(original_parts, candidate_parts, strict=True):
+        if len(candidate.exterior.coords) < 4:
+            return False
+        if any(len(ring.coords) < 4 for ring in candidate.interiors):
+            return False
+        if _bounds_delta(original.bounds, candidate.bounds) > max_bounds_delta:
+            return False
+    return True
+
+
+def _polygon_area(polygons: list) -> float:
+    return float(sum(polygon.area for polygon in polygons))
+
+
+def _polygon_hole_count(polygons: list) -> int:
+    return sum(len(polygon.interiors) for polygon in polygons)
+
+
+def _bounds_delta(before: tuple[float, float, float, float], after: tuple[float, float, float, float]) -> float:
+    return max(abs(float(left) - float(right)) for left, right in zip(before, after, strict=True))
 
 
 def _vector_mesh_is_safe(mesh: trimesh.Trimesh) -> bool:
